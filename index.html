@@ -821,13 +821,31 @@ async function doSearch(city) {
     const location = geoResults[0].geometry.location;
     const geoBounds = geoResults[0].geometry.viewport || geoResults[0].geometry.bounds || null;
 
-    // Wyciągnij nazwę dzielnicy/sublocality z geocodera
-    // Jeśli użytkownik wpisał np. "Warszawa Żoliborz", geocoder zwróci Żoliborz jako komponent
+    // Wyciągnij nazwę miasta i dzielnicy z geocodera
     const geoComponents = geoResults[0].address_components || [];
     const districtTypes = [
       'sublocality_level_1','sublocality_level_2','sublocality',
       'neighborhood','administrative_area_level_3','administrative_area_level_4'
     ];
+
+    // Miasto
+    let geoCity = '';
+    for (const comp of geoComponents) {
+      if (comp.types.includes('locality')) {
+        geoCity = comp.long_name;
+        break;
+      }
+    }
+    if (!geoCity) {
+      for (const comp of geoComponents) {
+        if (comp.types.includes('administrative_area_level_3')) {
+          geoCity = comp.long_name;
+          break;
+        }
+      }
+    }
+
+    // Dzielnica
     let geoDistrict = '';
     for (const comp of geoComponents) {
       if (comp.types.some(t => districtTypes.includes(t))) {
@@ -835,7 +853,7 @@ async function doSearch(city) {
         break;
       }
     }
-    dbg('Rozpoznana dzielnica: ' + (geoDistrict || '(brak – szukam w całym mieście)'));
+    dbg('Miasto: ' + (geoCity || '(?)') + ' | Dzielnica: ' + (geoDistrict || '(brak)'));
 
     if (!isMobile) {
       // Przywróć mapę do normalnego widoku
@@ -858,6 +876,14 @@ async function doSearch(city) {
           detail.district = await reverseGeocodeDistrict(detail.lat, detail.lng, detail.city);
         }
         if (detail && passesQualityFilter(detail)) {
+          // Filtr miasta: odrzuć lokale z innego miasta
+          if (geoCity) {
+            const detailCity = (detail.city || '').toLowerCase().trim();
+            const targetCity = geoCity.toLowerCase().trim();
+            if (detailCity && detailCity !== targetCity) {
+              continue; // inne miasto — pomiń
+            }
+          }
           // Filtr dzielnicy: odrzuć tylko jeśli lokal MA rozpoznaną dzielnicę
           // i jest ona INNA niż szukana. Jeśli brak dzielnicy — akceptuj
           let matchesDistrict = true;
