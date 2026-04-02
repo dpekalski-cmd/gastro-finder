@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gastro Finder</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Styrene+A:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -428,6 +429,84 @@
   .tab-btn.active { color: var(--accent); }
   .tab-btn svg { width: 20px; height: 20px; }
 
+  /* ── ANALYTICS DASHBOARD ── */
+  #analyticsPanel {
+    border-top: 2px solid var(--accent);
+    background: var(--surface);
+  }
+  .analytics-header {
+    padding: 16px 22px 8px;
+  }
+  .analytics-title {
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .analytics-grid {
+    padding: 8px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .analytics-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .a-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 12px;
+    text-align: center;
+  }
+  .a-card-val {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1.2;
+  }
+  .a-card-lbl {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 4px;
+  }
+  .a-card-sub {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .chart-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .chart-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    aspect-ratio: 1;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+  .chart-box canvas {
+    flex: 1;
+    min-height: 0;
+  }
+  .chart-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+
   /* ── SCROLLBAR ── */
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -509,6 +588,13 @@
     /* Debug bar */
     #debugBar { font-size: 11px; padding: 8px 12px; }
 
+    /* Analytics mobile */
+    .analytics-cards { grid-template-columns: repeat(2, 1fr); }
+    .chart-grid { grid-template-columns: 1fr; }
+    .chart-box { aspect-ratio: 4/3; }
+    .analytics-grid { padding: 8px 12px 16px; }
+    .analytics-header { padding: 12px 12px 4px; }
+
     /* Ukryj zakładki */
     .mobile-tabs { display: none !important; }
   }
@@ -557,7 +643,7 @@
     <div>
       <div class="field-label">Liczba wyników</div>
       <div style="display:flex;align-items:center;gap:10px;">
-        <input type="range" id="countSelect" min="10" max="100" step="10" value="20"
+        <input type="range" id="countSelect" min="10" max="200" step="10" value="20"
           style="flex:1;accent-color:var(--accent);cursor:pointer;"
           oninput="document.getElementById('countVal').textContent=this.value"/>
         <span id="countVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:32px;">20</span>
@@ -636,6 +722,37 @@
           <div>Wybierz typ lokalu i miasto, następnie kliknij Szukaj</div>
         </div>
       </div>
+
+      <!-- ANALYTICS DASHBOARD -->
+      <div id="analyticsPanel" style="display:none;">
+        <div class="analytics-header">
+          <div class="analytics-title">📊 Analityka wyszukiwania</div>
+        </div>
+        <div class="analytics-grid" id="analyticsGrid">
+          <!-- Row 1: Summary cards -->
+          <div class="analytics-cards" id="summaryCards"></div>
+          <!-- Charts: 3 per row, square proportions -->
+          <div class="chart-grid">
+            <div class="chart-box">
+              <div class="chart-label">Rozkład ocen</div>
+              <canvas id="chartRatings"></canvas>
+            </div>
+            <div class="chart-box">
+              <div class="chart-label">Top 5 vs pozostałe</div>
+              <canvas id="chartTopVsRest"></canvas>
+            </div>
+            <div class="chart-box">
+              <div class="chart-label">Rozkład Wyniku</div>
+              <canvas id="chartScores"></canvas>
+            </div>
+            <div class="chart-box">
+              <div class="chart-label">Pokrycie dzielnic</div>
+              <canvas id="chartDistricts"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
   </div>
@@ -665,6 +782,10 @@
 <script>
 // ── STATE ──
 let apiKey = '';
+
+// ── KONFIGURACJA BACKENDU ──
+// Zmień na adres swojego hostingu po wgraniu email-scraper.php
+const EMAIL_SCRAPER_URL = 'https://plonpol.pl/email-scraper.php';
 let map = null;
 let markers = [];
 let placesService = null;
@@ -907,8 +1028,16 @@ async function doSearch(city) {
       renderResults(results);
       if (!isMobile) addMarkers(results);
       updateStats(results);
+      renderAnalytics(results);
       document.getElementById('exportBtn').disabled = false;
       document.getElementById('debugBar').style.display = 'none';
+
+      // Szukaj emaili w tle (jeśli backend skonfigurowany)
+      if (EMAIL_SCRAPER_URL) {
+        scrapeEmails(results, dbg).then(() => {
+          document.getElementById('debugBar').style.display = 'none';
+        });
+      }
     } catch (err) {
       dbg('BŁĄD wyszukiwania: ' + err.message);
     }
@@ -966,22 +1095,38 @@ async function searchPlaces(location, totalNeeded, geoBounds, dbg) {
   };
   const { type, keyword } = typeMap[activeChip];
 
-  // Strategia: nearbySearch z rankBy=DISTANCE z kilku punktów w siatce
-  const searchPoints = [location];
+  // Adaptacyjna siatka punktów wyszukiwania
+  const searchPoints = [];
 
   if (geoBounds) {
     const ne = geoBounds.getNorthEast();
     const sw = geoBounds.getSouthWest();
-    const cLat = (ne.lat() + sw.lat()) / 2;
-    const cLng = (ne.lng() + sw.lng()) / 2;
-    const dLat = (ne.lat() - sw.lat()) / 4;
-    const dLng = (ne.lng() - sw.lng()) / 4;
-    searchPoints.push(
-      new google.maps.LatLng(cLat + dLat, cLng),
-      new google.maps.LatLng(cLat - dLat, cLng),
-      new google.maps.LatLng(cLat, cLng + dLng),
-      new google.maps.LatLng(cLat, cLng - dLng)
-    );
+    const latSpan = ne.lat() - sw.lat();
+    const lngSpan = ne.lng() - sw.lng();
+    const diagKm = Math.sqrt(latSpan * latSpan + lngSpan * lngSpan) * 111;
+
+    // Gęstość siatki zależy od wielkości obszaru i liczby żądanych wyników
+    // Małe (<5km, dzielnica): 2×2, średnie (<15km): 3×3, duże (miasto): 4×4, mega: 5×5
+    let gridSize;
+    if (diagKm < 5) gridSize = 2;
+    else if (diagKm < 12) gridSize = 3;
+    else if (diagKm < 25) gridSize = 4;
+    else gridSize = 5;
+
+    // Zagęść jeśli użytkownik chce dużo wyników
+    if (totalNeeded > 80 && gridSize < 4) gridSize = 4;
+    if (totalNeeded > 150 && gridSize < 5) gridSize = 5;
+
+    for (let r = 0; r < gridSize; r++) {
+      for (let c = 0; c < gridSize; c++) {
+        const lat = sw.lat() + latSpan * (r + 0.5) / gridSize;
+        const lng = sw.lng() + lngSpan * (c + 0.5) / gridSize;
+        searchPoints.push(new google.maps.LatLng(lat, lng));
+      }
+    }
+    if (dbg) dbg(`Siatka ${gridSize}×${gridSize} = ${searchPoints.length} punktów (~${diagKm.toFixed(0)} km)`);
+  } else {
+    searchPoints.push(location);
   }
 
   const seenIds = new Set();
@@ -989,7 +1134,7 @@ async function searchPlaces(location, totalNeeded, geoBounds, dbg) {
 
   for (let idx = 0; idx < searchPoints.length; idx++) {
     const point = searchPoints[idx];
-    if (dbg) dbg(`Skanowanie obszaru (${idx+1}/${searchPoints.length})...`);
+    if (dbg) dbg(`Skanowanie obszaru (${idx+1}/${searchPoints.length})... znaleziono ${allPlaces.length} lokali`);
     try {
       const pagePlaces = await new Promise((res, rej) => {
         placesService.nearbySearch({
@@ -1201,6 +1346,7 @@ function renderResults(data) {
       <td>${esc(p.district)}</td>
       <td title="${escAttr(p.street)}">${esc(p.street)}</td>
       <td>${esc(p.phone)}</td>
+      <td class="link-cell">${p.email ? `<a href="mailto:${escAttr(p.email)}">${esc(p.email)}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td class="link-cell">${p.website && /^https?:\/\//i.test(p.website) ? `<a href="${escAttr(p.website)}" target="_blank" rel="noopener noreferrer">↗ www</a>` : '—'}</td>
     </tr>`;
   }).join('');
@@ -1219,6 +1365,7 @@ function renderResults(data) {
           <th>Dzielnica</th>
           <th>Ulica</th>
           <th>Telefon</th>
+          <th>E-mail</th>
           <th>Strona WWW</th>
         </tr>
       </thead>
@@ -1244,6 +1391,252 @@ function updateStats(data) {
   document.getElementById('statCount').textContent = data.length;
   const avgRating = data.length ? (data.reduce((s,p) => s + p.rating, 0) / data.length).toFixed(1) : '—';
   document.getElementById('statAvgRating').textContent = avgRating;
+}
+
+// ── ANALYTICS DASHBOARD ──
+let chartInstances = [];
+
+function destroyCharts() {
+  chartInstances.forEach(c => c.destroy());
+  chartInstances = [];
+}
+
+function renderAnalytics(data) {
+  if (!data.length) {
+    document.getElementById('analyticsPanel').style.display = 'none';
+    return;
+  }
+  document.getElementById('analyticsPanel').style.display = 'block';
+  destroyCharts();
+
+  const accent = '#D97757';
+  const accent2 = '#C4623E';
+  const accentLight = 'rgba(217,119,87,0.15)';
+  const green = '#3A9E6E';
+  const muted = '#7A776F';
+  const chartFont = { family: "'Inter', sans-serif", size: 11, color: '#1A1915' };
+
+  Chart.defaults.font.family = chartFont.family;
+  Chart.defaults.font.size = chartFont.size;
+  Chart.defaults.color = muted;
+
+  // ── Summary cards ──
+  const avgRating = (data.reduce((s,p) => s+p.rating, 0) / data.length).toFixed(2);
+  const totalReviews = data.reduce((s,p) => s+p.reviews, 0);
+  const avgScore = (data.reduce((s,p) => s + p.rating * Math.log10(p.reviews+1), 0) / data.length).toFixed(1);
+  const topPlace = data[0];
+  const districts = [...new Set(data.map(p => p.district).filter(Boolean))];
+
+  document.getElementById('summaryCards').innerHTML = `
+    <div class="a-card">
+      <div class="a-card-val">${data.length}</div>
+      <div class="a-card-lbl">Lokali</div>
+    </div>
+    <div class="a-card">
+      <div class="a-card-val">${avgRating}</div>
+      <div class="a-card-lbl">Śr. ocena</div>
+    </div>
+    <div class="a-card">
+      <div class="a-card-val">${totalReviews.toLocaleString('pl')}</div>
+      <div class="a-card-lbl">Łącznie opinii</div>
+    </div>
+    <div class="a-card">
+      <div class="a-card-val">${avgScore}</div>
+      <div class="a-card-lbl">Śr. Wynik</div>
+    </div>`;
+
+  // ── Chart 1: Rozkład ocen (histogram) ──
+  const ratingBuckets = [
+    { label: '3.0–3.4', min: 3.0, max: 3.45 },
+    { label: '3.5–3.9', min: 3.45, max: 3.95 },
+    { label: '4.0–4.2', min: 3.95, max: 4.25 },
+    { label: '4.3–4.5', min: 4.25, max: 4.55 },
+    { label: '4.6–4.8', min: 4.55, max: 4.85 },
+    { label: '4.9–5.0', min: 4.85, max: 5.01 },
+  ];
+  const ratingCounts = ratingBuckets.map(b => data.filter(p => p.rating >= b.min && p.rating < b.max).length);
+
+  chartInstances.push(new Chart(document.getElementById('chartRatings'), {
+    type: 'bar',
+    data: {
+      labels: ratingBuckets.map(b => b.label),
+      datasets: [{
+        data: ratingCounts,
+        backgroundColor: ratingBuckets.map((_, i) => {
+          const intensity = 0.3 + (i / (ratingBuckets.length - 1)) * 0.7;
+          return `rgba(217,119,87,${intensity})`;
+        }),
+        borderRadius: 4,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        x: { grid: { display: false } }
+      }
+    }
+  }));
+
+  // ── Chart 2: Top 5 vs reszta ──
+  const top5 = data.slice(0, 5);
+  const rest = data.slice(5);
+  const top5Avg = top5.length ? (top5.reduce((s,p) => s+p.rating, 0) / top5.length).toFixed(2) : 0;
+  const restAvg = rest.length ? (rest.reduce((s,p) => s+p.rating, 0) / rest.length).toFixed(2) : 0;
+  const top5Rev = top5.length ? Math.round(top5.reduce((s,p) => s+p.reviews, 0) / top5.length) : 0;
+  const restRev = rest.length ? Math.round(rest.reduce((s,p) => s+p.reviews, 0) / rest.length) : 0;
+
+  chartInstances.push(new Chart(document.getElementById('chartTopVsRest'), {
+    type: 'bar',
+    data: {
+      labels: ['Śr. ocena', 'Śr. opinii (÷100)'],
+      datasets: [
+        {
+          label: 'Top 5',
+          data: [top5Avg, (top5Rev / 100).toFixed(1)],
+          backgroundColor: accent,
+          borderRadius: 4,
+        },
+        {
+          label: 'Pozostałe',
+          data: [restAvg, (restRev / 100).toFixed(1)],
+          backgroundColor: 'rgba(217,119,87,0.25)',
+          borderRadius: 4,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } },
+      scales: {
+        y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } },
+        x: { grid: { display: false } }
+      }
+    }
+  }));
+
+  // ── Chart 3: Rozkład wyników (scatter) ──
+  const scatterData = data.map(p => ({
+    x: p.reviews,
+    y: p.rating,
+    label: p.name,
+  }));
+
+  chartInstances.push(new Chart(document.getElementById('chartScores'), {
+    type: 'bubble',
+    data: {
+      datasets: [{
+        data: scatterData.map(d => ({
+          x: d.x,
+          y: d.y,
+          r: Math.max(4, Math.min(18, d.x / (data.reduce((s,p)=>s+p.reviews,0)/data.length) * 8)),
+        })),
+        backgroundColor: 'rgba(217,119,87,0.35)',
+        borderColor: accent,
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const d = scatterData[ctx.dataIndex];
+              return `${d.label}: ★${d.y} · ${d.x} opinii`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Liczba opinii', font: { size: 10 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        y: { title: { display: true, text: 'Ocena', font: { size: 10 } }, min: 3.0, max: 5.1, grid: { color: 'rgba(0,0,0,0.05)' } }
+      }
+    }
+  }));
+
+  // ── Chart 4: Pokrycie dzielnic ──
+  const districtCounts = {};
+  data.forEach(p => {
+    const d = p.district || '(brak danych)';
+    districtCounts[d] = (districtCounts[d] || 0) + 1;
+  });
+  const sortedDistricts = Object.entries(districtCounts).sort((a,b) => b[1] - a[1]);
+  const districtColors = sortedDistricts.map((_, i) => {
+    const intensity = 0.3 + (1 - i / Math.max(sortedDistricts.length - 1, 1)) * 0.7;
+    return `rgba(217,119,87,${intensity})`;
+  });
+
+  chartInstances.push(new Chart(document.getElementById('chartDistricts'), {
+    type: sortedDistricts.length > 8 ? 'bar' : 'doughnut',
+    data: {
+      labels: sortedDistricts.map(d => d[0]),
+      datasets: [{
+        data: sortedDistricts.map(d => d[1]),
+        backgroundColor: districtColors,
+        borderWidth: sortedDistricts.length > 8 ? 0 : 2,
+        borderColor: '#fff',
+        borderRadius: sortedDistricts.length > 8 ? 4 : 0,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: sortedDistricts.length > 8
+          ? { display: false }
+          : { position: 'right', labels: { boxWidth: 10, padding: 6, font: { size: 10 } } }
+      },
+      ...(sortedDistricts.length > 8 ? {
+        indexAxis: 'y',
+        scales: {
+          x: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: 'rgba(0,0,0,0.05)' } },
+          y: { grid: { display: false } }
+        }
+      } : {})
+    }
+  }));
+}
+
+// ── EMAIL SCRAPER ──
+async function scrapeEmails(data, dbg) {
+  if (!EMAIL_SCRAPER_URL) return; // backend nie skonfigurowany
+  const withWebsite = data.filter(p => p.website && /^https?:\/\//i.test(p.website));
+  if (!withWebsite.length) return;
+
+  if (dbg) dbg(`Szukanie adresów email (0/${withWebsite.length})...`);
+
+  let found = 0;
+  for (let i = 0; i < withWebsite.length; i++) {
+    const place = withWebsite[i];
+    if (dbg) dbg(`Szukanie email (${i+1}/${withWebsite.length}): ${place.name}...`);
+    try {
+      const resp = await fetch(`${EMAIL_SCRAPER_URL}?url=${encodeURIComponent(place.website)}`, {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.emails && json.emails.length > 0) {
+          place.email = json.emails[0]; // pierwszy znaleziony
+          found++;
+        }
+      }
+    } catch (e) {
+      // Timeout lub błąd sieci — pomijamy
+    }
+    await sleep(100); // nie zalewamy serwera
+  }
+
+  if (dbg) dbg(`Znaleziono ${found} adresów email`);
+
+  // Odśwież tabelę z emailami
+  renderResults(data);
 }
 
 // ── EXCEL EXPORT ──
