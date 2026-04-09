@@ -627,11 +627,12 @@
   <div class="sidebar tab-active" id="mobileSidebar">
 
     <div>
-      <div class="field-label">Typ lokalu</div>
+      <div class="field-label">Typ wyszukiwania</div>
       <div class="chip-group" id="typeChips">
         <div class="chip active" data-type="cafe">☕ Kawiarnia</div>
         <div class="chip" data-type="restaurant">🍽️ Restauracja</div>
         <div class="chip" data-type="hotel_restaurant">🏨 Rest. hotelowa</div>
+        <div class="chip" data-type="company">🏢 Firmy</div>
       </div>
     </div>
 
@@ -643,7 +644,7 @@
     <div>
       <div class="field-label">Liczba wyników</div>
       <div style="display:flex;align-items:center;gap:10px;">
-        <input type="range" id="countSelect" min="10" max="200" step="10" value="20"
+        <input type="range" id="countSelect" min="10" max="500" step="10" value="20"
           style="flex:1;accent-color:var(--accent);cursor:pointer;"
           oninput="document.getElementById('countVal').textContent=this.value"/>
         <span id="countVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:32px;">20</span>
@@ -674,7 +675,16 @@
 
     <div class="divider"></div>
 
-    <button class="btn-primary" id="searchBtn" onclick="startSearch()">🔍 Szukaj</button>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.82rem;color:var(--text);">
+      <input type="checkbox" id="emailCheckbox" style="accent-color:var(--accent);width:16px;height:16px;cursor:pointer;"/>
+      Szukaj adresów e-mail
+      <span style="font-size:0.7rem;color:var(--text-muted);">(wolniejsze)</span>
+    </label>
+
+    <div style="display:flex;gap:7px;">
+      <button class="btn-primary" id="searchBtn" onclick="startSearch()" style="flex:1;">🔍 Szukaj</button>
+      <button class="btn-primary" id="stopBtn" onclick="stopSearch()" style="flex:0 0 48px;background:var(--red);display:none;" title="Zatrzymaj wyszukiwanie">■</button>
+    </div>
     <button class="btn-secondary" id="exportBtn" onclick="exportExcel()" disabled>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Eksportuj do Excel
@@ -792,6 +802,13 @@ let placesService = null;
 let results = [];
 let activeChip = 'cafe';
 let highlightedRow = null;
+let searchAborted = false;
+
+function stopSearch() {
+  searchAborted = true;
+  document.getElementById('stopBtn').style.display = 'none';
+  document.getElementById('searchBtn').disabled = false;
+}
 
 // ── SECURITY: HTML escape ──
 function esc(str) {
@@ -815,8 +832,8 @@ document.querySelectorAll('.chip').forEach(chip => {
 // ── INIT API ──
 function initWithKey() {
   const key = document.getElementById('apiKeyInput').value.trim();
-  if (!key.startsWith('AIza') || key.length < 30) {
-    alert('Wygląda na nieprawidłowy klucz API. Powinien zaczynać się od "AIza..."');
+  if (!key.startsWith('AIza') || key.length < 30 || !/^[A-Za-z0-9_\-]+$/.test(key)) {
+    alert('Wygląda na nieprawidłowy klucz API. Powinien zaczynać się od "AIza..." i zawierać tylko litery, cyfry, myślniki i podkreślniki.');
     return;
   }
   apiKey = key;
@@ -887,7 +904,9 @@ async function startSearch() {
 async function doSearch(city) {
   const count = parseInt(document.getElementById('countSelect').value);
   document.getElementById('searchBtn').disabled = true;
+  document.getElementById('stopBtn').style.display = 'block';
   document.getElementById('exportBtn').disabled = true;
+  searchAborted = false;
   results = [];
   clearMarkers();
   const isMobile = window.innerWidth <= 700;
@@ -988,9 +1007,11 @@ async function doSearch(city) {
     dbg('Wyszukuję lokale...');
     try {
       const places = await searchPlaces(location, count, geoBounds, dbg);
+      if (searchAborted) { dbg('Przerwano.'); document.getElementById('stopBtn').style.display = 'none'; document.getElementById('searchBtn').disabled = false; return; }
       dbg('KROK 6: Znaleziono ' + places.length + ' miejsc');
       const detailed = [];
       for (let i = 0; i < places.length; i++) {
+        if (searchAborted) break;
         dbg(`Pobieranie szczegółów (${i+1}/${places.length})...`);
         const detail = await getPlaceDetails(places[i].place_id);
         if (detail && !detail.district && detail.lat && detail.lng) {
@@ -1030,10 +1051,11 @@ async function doSearch(city) {
       updateStats(results);
       renderAnalytics(results);
       document.getElementById('exportBtn').disabled = false;
+      document.getElementById('stopBtn').style.display = 'none';
       document.getElementById('debugBar').style.display = 'none';
 
       // Szukaj emaili w tle (jeśli backend skonfigurowany)
-      if (EMAIL_SCRAPER_URL) {
+      if (EMAIL_SCRAPER_URL && !searchAborted && document.getElementById('emailCheckbox').checked) {
         scrapeEmails(results, dbg).then(() => {
           document.getElementById('debugBar').style.display = 'none';
         });
@@ -1042,6 +1064,7 @@ async function doSearch(city) {
       dbg('BŁĄD wyszukiwania: ' + err.message);
     }
     document.getElementById('searchBtn').disabled = false;
+    document.getElementById('stopBtn').style.display = 'none';
   });
 } // end doSearch
 
@@ -1054,6 +1077,41 @@ const BAD_TYPES = [
 ];
 const GOOD_TYPES = ['cafe', 'restaurant', 'bar', 'bakery'];
 
+// Wykluczone typy dla trybu "Firmy"
+const COMPANY_BAD_TYPES = [
+  // Sklepy / markety
+  'store','supermarket','grocery_or_supermarket','convenience_store','shopping_mall',
+  'clothing_store','shoe_store','jewelry_store','book_store','hardware_store',
+  'home_goods_store','furniture_store','electronics_store','pet_store','florist',
+  'liquor_store','bicycle_store','department_store','drugstore',
+  // Szkoły / edukacja
+  'school','primary_school','secondary_school','university','library',
+  // Kościoły / miejsca kultu
+  'church','mosque','synagogue','hindu_temple','place_of_worship',
+  // Szpitale / przychodnie
+  'hospital','doctor','dentist','physiotherapist','pharmacy','veterinary_care',
+  // Stacje benzynowe
+  'gas_station',
+  // Bankomaty
+  'atm',
+  // Salony fryzjerskie / kosmetyczne
+  'hair_care','beauty_salon','spa',
+  // Siłownie / fitness
+  'gym',
+  // Transport / infrastruktura
+  'transit_station','bus_station','train_station','airport','parking','taxi_stand',
+  'subway_station','light_rail_station',
+  // Gastronomia (osobne chipy) — bez bakery (przepuszczamy)
+  'restaurant','cafe','bar','meal_delivery','meal_takeaway',
+  // Inne nierelewantne
+  'campground','rv_park','cemetery','funeral_home',
+  'laundry','locksmith','car_wash','car_repair','car_rental',
+  'casino','night_club','amusement_park','aquarium','zoo','museum',
+  'movie_theater','bowling_alley','stadium','park','tourist_attraction',
+  'local_government_office','courthouse','city_hall','police','fire_station',
+  'post_office','storage','moving_company'
+];
+
 // ── WARSTWA 2: Czarna lista nazw sieci ──
 const BLACKLIST_NAMES = [
   'żabka','zabka','orlen','bp stacja','shell','circle k','lotos stacja',
@@ -1065,14 +1123,35 @@ const BLACKLIST_NAMES = [
   'gorąco polecam','goraco polecam'
 ];
 
+// Czarna lista nazw dla trybu "Firmy" — sieciowe banki, hotele, piekarnie
+const COMPANY_BLACKLIST_NAMES = [
+  // Banki sieciowe
+  'pko','mbank','ing bank','santander','bnp paribas','millennium','pekao',
+  'credit agricole','alior bank','nest bank','citi handlowy','getin',
+  'bank pocztowy','plus bank','velo bank',
+  // Hotele sieciowe
+  'hilton','marriott','ibis','novotel','mercure','accor','radisson',
+  'best western','holiday inn','sheraton','hyatt','crowne plaza',
+  'hampton','courtyard','premier inn','b&b hotel','motel one','wyndham',
+  // Piekarnie sieciowe
+  'oskroba','putka','grzybki','piwoński','piwonski','gromulski',
+  'paul bakery','lajkonik','schulstad'
+];
+
 function isBlacklisted(place) {
   const types = place.types || [];
-  const hasGoodType = types.some(t => GOOD_TYPES.includes(t));
-  // Warstwa 1: wyklucz tylko jeśli ma zły typ I nie ma dobrego
-  if (!hasGoodType && types.some(t => BAD_TYPES.includes(t))) return true;
-  // Warstwa 2: czarna lista nazw
   const nameLower = (place.name || '').toLowerCase();
-  if (BLACKLIST_NAMES.some(b => nameLower.includes(b))) return true;
+
+  if (activeChip === 'company') {
+    // Tryb firmowy: wyklucz niechciane typy + sieciówki
+    if (types.some(t => COMPANY_BAD_TYPES.includes(t))) return true;
+    if (COMPANY_BLACKLIST_NAMES.some(b => nameLower.includes(b))) return true;
+  } else {
+    // Tryb gastronomiczny
+    const hasGoodType = types.some(t => GOOD_TYPES.includes(t));
+    if (!hasGoodType && types.some(t => BAD_TYPES.includes(t))) return true;
+    if (BLACKLIST_NAMES.some(b => nameLower.includes(b))) return true;
+  }
   return false;
 }
 
@@ -1089,11 +1168,29 @@ function passesQualityFilter(detail) {
 async function searchPlaces(location, totalNeeded, geoBounds, dbg) {
   const cityInput = document.getElementById('cityInput').value.trim();
   const typeMap = {
-    cafe:             { type: 'cafe', keyword: 'kawiarnia' },
-    restaurant:       { type: 'restaurant', keyword: 'restauracja' },
-    hotel_restaurant: { type: 'restaurant', keyword: 'restauracja hotelowa' },
+    cafe:             { type: 'cafe', keywords: ['kawiarnia'] },
+    restaurant:       { type: 'restaurant', keywords: ['restauracja'] },
+    hotel_restaurant: { type: 'restaurant', keywords: ['restauracja hotelowa'] },
+    company:          { type: 'establishment', keywords: [
+      'kancelaria prawna',
+      'agencja marketingowa',
+      'agencja reklamowa',
+      'software house',
+      'firma IT',
+      'doradztwo consulting',
+      'biuro architektoniczne',
+      'agencja nieruchomości',
+      'firma szkoleniowa',
+      'agencja eventowa',
+      'agencja PR',
+      'firma budowlana',
+      'biuro projektowe',
+      'salon samochodowy',
+      'hotel boutique',
+      'piekarnia rzemieślnicza',
+    ]},
   };
-  const { type, keyword } = typeMap[activeChip];
+  const { type, keywords } = typeMap[activeChip];
 
   // Adaptacyjna siatka punktów wyszukiwania
   const searchPoints = [];
@@ -1132,35 +1229,46 @@ async function searchPlaces(location, totalNeeded, geoBounds, dbg) {
   const seenIds = new Set();
   let allPlaces = [];
 
-  for (let idx = 0; idx < searchPoints.length; idx++) {
-    const point = searchPoints[idx];
-    if (dbg) dbg(`Skanowanie obszaru (${idx+1}/${searchPoints.length})... znaleziono ${allPlaces.length} lokali`);
-    try {
-      const pagePlaces = await new Promise((res, rej) => {
-        placesService.nearbySearch({
-          location: point,
-          rankBy: google.maps.places.RankBy.DISTANCE,
-          type,
-          keyword,
-        }, (results, status) => {
-          if (status === google.maps.places.PlacesServiceStatus.OK && results) {
-            res(results);
-          } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-            res([]);
-          } else {
-            rej(new Error('Places API error: ' + status));
-          }
-        });
-      });
+  // Dla trybu company: mniej punktów siatki, więcej keywordów
+  // Dla gastro: pełna siatka, jeden keyword
+  const isCompany = (keywords.length > 1);
+  const pointsToUse = isCompany ? searchPoints.slice(0, Math.min(searchPoints.length, 4)) : searchPoints;
+  const totalSteps = pointsToUse.length * keywords.length;
+  let step = 0;
 
-      for (const p of pagePlaces) {
-        if (!isBlacklisted(p) && !seenIds.has(p.place_id)) {
-          seenIds.add(p.place_id);
-          allPlaces.push(p);
+  for (const kw of keywords) {
+    if (searchAborted) break;
+    for (const point of pointsToUse) {
+      if (searchAborted) break;
+      step++;
+      if (dbg) dbg(`Skanowanie (${step}/${totalSteps}): "${kw}"... znaleziono ${allPlaces.length}`);
+      try {
+        const pagePlaces = await new Promise((res, rej) => {
+          placesService.nearbySearch({
+            location: point,
+            rankBy: google.maps.places.RankBy.DISTANCE,
+            type,
+            keyword: kw,
+          }, (results, status) => {
+            if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+              res(results);
+            } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+              res([]);
+            } else {
+              rej(new Error('Places API error: ' + status));
+            }
+          });
+        });
+
+        for (const p of pagePlaces) {
+          if (!isBlacklisted(p) && !seenIds.has(p.place_id)) {
+            seenIds.add(p.place_id);
+            allPlaces.push(p);
+          }
         }
+      } catch (e) {
+        console.warn(`[GastroFinder] Błąd:`, e.message);
       }
-    } catch (e) {
-      console.warn(`[GastroFinder] Błąd dla punktu:`, e.message);
     }
   }
 
@@ -1205,7 +1313,7 @@ function getPlaceDetails(placeId) {
       'place_id','name','rating','user_ratings_total',
       'formatted_address','address_components',
       'formatted_phone_number','website','url','geometry',
-      'business_status'
+      'business_status','types'
     ];
     placesService.getDetails({ placeId, fields }, (place, status) => {
       if (status === google.maps.places.PlacesServiceStatus.OK && place) {
@@ -1237,6 +1345,57 @@ function parsePlace(p) {
   const streetNo  = get(['street_number']);
   const streetFull = street ? (streetNo ? `${street} ${streetNo}` : street) : '';
 
+  // Branża — tłumaczenie typów Google na polski
+  const typeTranslations = {
+    lawyer: 'Kancelaria prawna',
+    accounting: 'Księgowość / Rachunkowość',
+    insurance_agency: 'Ubezpieczenia',
+    real_estate_agency: 'Nieruchomości',
+    travel_agency: 'Biuro podróży',
+    employment_agency: 'Agencja pracy',
+    finance: 'Finanse',
+    bank: 'Bank',
+    car_dealer: 'Salon samochodowy',
+    lodging: 'Hotel',
+    bakery: 'Piekarnia',
+    dentist: 'Dentysta',
+    doctor: 'Lekarz',
+    physiotherapist: 'Fizjoterapia',
+    veterinary_care: 'Weterynarz',
+    moving_company: 'Firma przeprowadzkowa',
+    painter: 'Malarz',
+    plumber: 'Hydraulik',
+    electrician: 'Elektryk',
+    roofing_contractor: 'Dekarz',
+    general_contractor: 'Firma budowlana',
+    establishment: 'Firma',
+    point_of_interest: '',
+    food: 'Gastronomia',
+    store: 'Sklep',
+    health: 'Zdrowie',
+    local_government_office: 'Urząd',
+  };
+
+  let industry = '';
+  if (p.types && p.types.length) {
+    // Znajdź pierwszy typ który ma tłumaczenie i nie jest generyczny
+    const skipGeneric = ['establishment','point_of_interest','premise','political','route',
+                         'street_address','geocode','sublocality','locality'];
+    for (const t of p.types) {
+      if (skipGeneric.includes(t)) continue;
+      if (typeTranslations[t]) { industry = typeTranslations[t]; break; }
+    }
+    // Jeśli nie znaleźliśmy tłumaczenia — użyj pierwszego nietypowego tagu
+    if (!industry) {
+      for (const t of p.types) {
+        if (skipGeneric.includes(t)) continue;
+        industry = t.replace(/_/g, ' ');
+        industry = industry.charAt(0).toUpperCase() + industry.slice(1);
+        break;
+      }
+    }
+  }
+
   return {
     name: p.name || '',
     rating: p.rating || 0,
@@ -1252,6 +1411,7 @@ function parsePlace(p) {
     googleUrl: p.url || '',
     lat: p.geometry?.location?.lat(),
     lng: p.geometry?.location?.lng(),
+    industry,
   };
 }
 
@@ -1332,12 +1492,15 @@ function renderResults(data) {
     return;
   }
 
+  const isCompanyMode = (activeChip === 'company');
+
   const rows = data.map((p, i) => {
     const score = (p.rating * Math.log10(p.reviews + 1)).toFixed(1);
     return `
     <tr onclick="focusMarker(${i})">
       <td class="rank-cell">#${i+1}</td>
       <td class="name-cell" title="${escAttr(p.name)}">${esc(p.name)}</td>
+      ${isCompanyMode ? `<td>${esc(p.industry || '—')}</td>` : ''}
       <td><span class="rating-badge"><span class="star">★</span>${p.rating.toFixed(1)}</span></td>
       <td class="reviews-count">${p.reviews.toLocaleString('pl')}</td>
       <td><strong>${score}</strong></td>
@@ -1357,6 +1520,7 @@ function renderResults(data) {
         <tr>
           <th>#</th>
           <th>Nazwa</th>
+          ${isCompanyMode ? '<th>Branża</th>' : ''}
           <th>Ocena</th>
           <th>Liczba opinii</th>
           <th>Wynik</th>
@@ -1382,7 +1546,7 @@ function focusMarker(idx) {
 }
 
 function typeLabel(t) {
-  return { cafe: 'Kawiarnie', restaurant: 'Restauracje', hotel_restaurant: 'Restauracje hotelowe' }[t] || t;
+  return { cafe: 'Kawiarnie', restaurant: 'Restauracje', hotel_restaurant: 'Restauracje hotelowe', company: 'Firmy' }[t] || t;
 }
 
 // ── STATS ──
@@ -1614,6 +1778,7 @@ async function scrapeEmails(data, dbg) {
 
   let found = 0;
   for (let i = 0; i < withWebsite.length; i++) {
+    if (searchAborted) break;
     const place = withWebsite[i];
     if (dbg) dbg(`Szukanie email (${i+1}/${withWebsite.length}): ${place.name}...`);
     try {
@@ -1623,8 +1788,12 @@ async function scrapeEmails(data, dbg) {
       if (resp.ok) {
         const json = await resp.json();
         if (json.emails && json.emails.length > 0) {
-          place.email = json.emails[0]; // pierwszy znaleziony
-          found++;
+          const email = json.emails[0];
+          // Walidacja formatu emaila z backendu
+          if (typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length < 80) {
+            place.email = email;
+            found++;
+          }
         }
       }
     } catch (e) {
@@ -1645,36 +1814,42 @@ function exportExcel() {
 
   const city = document.getElementById('cityInput').value;
   const typeL = typeLabel(activeChip);
+  const isCompanyMode = (activeChip === 'company');
+
+  const headers = isCompanyMode
+    ? ['#', 'Nazwa', 'Branża', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Kraj', 'Miasto', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW', 'Google Maps']
+    : ['#', 'Nazwa', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Kraj', 'Miasto', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW', 'Google Maps'];
 
   const wsData = [
-    ['#', 'Nazwa', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Kraj', 'Miasto', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW', 'Google Maps'],
-    ...results.map((p, i) => [
-      i + 1, p.name, p.rating, p.reviews,
-      parseFloat((p.rating * Math.log10(p.reviews + 1)).toFixed(1)),
-      p.country, p.city, p.district, p.street,
-      p.phone, p.email, p.website, p.googleUrl
-    ])
+    headers,
+    ...results.map((p, i) => {
+      const base = [
+        i + 1, p.name,
+        ...(isCompanyMode ? [p.industry || ''] : []),
+        p.rating, p.reviews,
+        parseFloat((p.rating * Math.log10(p.reviews + 1)).toFixed(1)),
+        p.country, p.city, p.district, p.street,
+        p.phone, p.email, p.website, p.googleUrl
+      ];
+      return base;
+    })
   ];
 
   const ws = XLSX.utils.aoa_to_sheet(wsData);
 
-  // Column widths
-  ws['!cols'] = [
-    {wch:5},{wch:35},{wch:12},{wch:14},{wch:8},{wch:12},{wch:16},{wch:20},{wch:28},{wch:18},{wch:22},{wch:32},{wch:40}
-  ];
+  ws['!cols'] = isCompanyMode
+    ? [{wch:5},{wch:35},{wch:22},{wch:12},{wch:14},{wch:8},{wch:12},{wch:16},{wch:20},{wch:28},{wch:18},{wch:22},{wch:32},{wch:40}]
+    : [{wch:5},{wch:35},{wch:12},{wch:14},{wch:8},{wch:12},{wch:16},{wch:20},{wch:28},{wch:18},{wch:22},{wch:32},{wch:40}];
 
-  // Header style (best effort – xlsx-style not in free SheetJS)
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Lokale');
+  XLSX.utils.book_append_sheet(wb, ws, isCompanyMode ? 'Firmy' : 'Lokale');
 
-  // Meta sheet
   const metaData = [
     ['Raport wygenerowany przez', 'Gastro Finder'],
     ['Data', new Date().toLocaleDateString('pl-PL')],
-    ['Typ lokalu', typeL],
+    ['Typ wyszukiwania', typeL],
     ['Wyszukiwana lokalizacja', city],
     ['Liczba wyników', results.length],
-    ['Uwaga', 'Adres e-mail nie jest udostępniany przez Google Places API'],
   ];
   const wsMeta = XLSX.utils.aoa_to_sheet(metaData);
   wsMeta['!cols'] = [{wch:28},{wch:40}];
