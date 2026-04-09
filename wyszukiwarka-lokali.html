@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gastro Finder</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Styrene+A:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -428,6 +429,84 @@
   .tab-btn.active { color: var(--accent); }
   .tab-btn svg { width: 20px; height: 20px; }
 
+  /* ── ANALYTICS DASHBOARD ── */
+  #analyticsPanel {
+    border-top: 2px solid var(--accent);
+    background: var(--surface);
+  }
+  .analytics-header {
+    padding: 16px 22px 8px;
+  }
+  .analytics-title {
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .analytics-grid {
+    padding: 8px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .analytics-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .a-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 12px;
+    text-align: center;
+  }
+  .a-card-val {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1.2;
+  }
+  .a-card-lbl {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 4px;
+  }
+  .a-card-sub {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .chart-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .chart-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    aspect-ratio: 1;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+  .chart-box canvas {
+    flex: 1;
+    min-height: 0;
+  }
+  .chart-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+
   /* ── SCROLLBAR ── */
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -509,6 +588,13 @@
     /* Debug bar */
     #debugBar { font-size: 11px; padding: 8px 12px; }
 
+    /* Analytics mobile */
+    .analytics-cards { grid-template-columns: repeat(2, 1fr); }
+    .chart-grid { grid-template-columns: 1fr; }
+    .chart-box { aspect-ratio: 4/3; }
+    .analytics-grid { padding: 8px 12px 16px; }
+    .analytics-header { padding: 12px 12px 4px; }
+
     /* Ukryj zakładki */
     .mobile-tabs { display: none !important; }
   }
@@ -541,11 +627,12 @@
   <div class="sidebar tab-active" id="mobileSidebar">
 
     <div>
-      <div class="field-label">Typ lokalu</div>
+      <div class="field-label">Typ wyszukiwania</div>
       <div class="chip-group" id="typeChips">
         <div class="chip active" data-type="cafe">☕ Kawiarnia</div>
         <div class="chip" data-type="restaurant">🍽️ Restauracja</div>
         <div class="chip" data-type="hotel_restaurant">🏨 Rest. hotelowa</div>
+        <div class="chip" data-type="company">🏢 Firmy</div>
       </div>
     </div>
 
@@ -557,7 +644,7 @@
     <div>
       <div class="field-label">Liczba wyników</div>
       <div style="display:flex;align-items:center;gap:10px;">
-        <input type="range" id="countSelect" min="10" max="100" step="10" value="20"
+        <input type="range" id="countSelect" min="10" max="500" step="10" value="20"
           style="flex:1;accent-color:var(--accent);cursor:pointer;"
           oninput="document.getElementById('countVal').textContent=this.value"/>
         <span id="countVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:32px;">20</span>
@@ -588,7 +675,16 @@
 
     <div class="divider"></div>
 
-    <button class="btn-primary" id="searchBtn" onclick="startSearch()">🔍 Szukaj</button>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.82rem;color:var(--text);">
+      <input type="checkbox" id="emailCheckbox" style="accent-color:var(--accent);width:16px;height:16px;cursor:pointer;"/>
+      Szukaj adresów e-mail
+      <span style="font-size:0.7rem;color:var(--text-muted);">(wolniejsze)</span>
+    </label>
+
+    <div style="display:flex;gap:7px;">
+      <button class="btn-primary" id="searchBtn" onclick="startSearch()" style="flex:1;">🔍 Szukaj</button>
+      <button class="btn-primary" id="stopBtn" onclick="stopSearch()" style="flex:0 0 48px;background:var(--red);display:none;" title="Zatrzymaj wyszukiwanie">■</button>
+    </div>
     <button class="btn-secondary" id="exportBtn" onclick="exportExcel()" disabled>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Eksportuj do Excel
@@ -636,6 +732,37 @@
           <div>Wybierz typ lokalu i miasto, następnie kliknij Szukaj</div>
         </div>
       </div>
+
+      <!-- ANALYTICS DASHBOARD -->
+      <div id="analyticsPanel" style="display:none;">
+        <div class="analytics-header">
+          <div class="analytics-title">📊 Analityka wyszukiwania</div>
+        </div>
+        <div class="analytics-grid" id="analyticsGrid">
+          <!-- Row 1: Summary cards -->
+          <div class="analytics-cards" id="summaryCards"></div>
+          <!-- Charts: 3 per row, square proportions -->
+          <div class="chart-grid">
+            <div class="chart-box">
+              <div class="chart-label">Rozkład ocen</div>
+              <canvas id="chartRatings"></canvas>
+            </div>
+            <div class="chart-box">
+              <div class="chart-label">Top 5 vs pozostałe</div>
+              <canvas id="chartTopVsRest"></canvas>
+            </div>
+            <div class="chart-box">
+              <div class="chart-label">Rozkład Wyniku</div>
+              <canvas id="chartScores"></canvas>
+            </div>
+            <div class="chart-box">
+              <div class="chart-label">Pokrycie dzielnic</div>
+              <canvas id="chartDistricts"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
   </div>
@@ -665,12 +792,23 @@
 <script>
 // ── STATE ──
 let apiKey = '';
+
+// ── KONFIGURACJA BACKENDU ──
+// Zmień na adres swojego hostingu po wgraniu email-scraper.php
+const EMAIL_SCRAPER_URL = 'https://plonpol.pl/email-scraper.php';
 let map = null;
 let markers = [];
 let placesService = null;
 let results = [];
 let activeChip = 'cafe';
 let highlightedRow = null;
+let searchAborted = false;
+
+function stopSearch() {
+  searchAborted = true;
+  document.getElementById('stopBtn').style.display = 'none';
+  document.getElementById('searchBtn').disabled = false;
+}
 
 // ── SECURITY: HTML escape ──
 function esc(str) {
@@ -694,8 +832,8 @@ document.querySelectorAll('.chip').forEach(chip => {
 // ── INIT API ──
 function initWithKey() {
   const key = document.getElementById('apiKeyInput').value.trim();
-  if (!key.startsWith('AIza') || key.length < 30) {
-    alert('Wygląda na nieprawidłowy klucz API. Powinien zaczynać się od "AIza..."');
+  if (!key.startsWith('AIza') || key.length < 30 || !/^[A-Za-z0-9_\-]+$/.test(key)) {
+    alert('Wygląda na nieprawidłowy klucz API. Powinien zaczynać się od "AIza..." i zawierać tylko litery, cyfry, myślniki i podkreślniki.');
     return;
   }
   apiKey = key;
@@ -766,7 +904,9 @@ async function startSearch() {
 async function doSearch(city) {
   const count = parseInt(document.getElementById('countSelect').value);
   document.getElementById('searchBtn').disabled = true;
+  document.getElementById('stopBtn').style.display = 'block';
   document.getElementById('exportBtn').disabled = true;
+  searchAborted = false;
   results = [];
   clearMarkers();
   const isMobile = window.innerWidth <= 700;
@@ -821,13 +961,31 @@ async function doSearch(city) {
     const location = geoResults[0].geometry.location;
     const geoBounds = geoResults[0].geometry.viewport || geoResults[0].geometry.bounds || null;
 
-    // Wyciągnij nazwę dzielnicy/sublocality z geocodera
-    // Jeśli użytkownik wpisał np. "Warszawa Żoliborz", geocoder zwróci Żoliborz jako komponent
+    // Wyciągnij nazwę miasta i dzielnicy z geocodera
     const geoComponents = geoResults[0].address_components || [];
     const districtTypes = [
       'sublocality_level_1','sublocality_level_2','sublocality',
       'neighborhood','administrative_area_level_3','administrative_area_level_4'
     ];
+
+    // Miasto
+    let geoCity = '';
+    for (const comp of geoComponents) {
+      if (comp.types.includes('locality')) {
+        geoCity = comp.long_name;
+        break;
+      }
+    }
+    if (!geoCity) {
+      for (const comp of geoComponents) {
+        if (comp.types.includes('administrative_area_level_3')) {
+          geoCity = comp.long_name;
+          break;
+        }
+      }
+    }
+
+    // Dzielnica
     let geoDistrict = '';
     for (const comp of geoComponents) {
       if (comp.types.some(t => districtTypes.includes(t))) {
@@ -835,7 +993,7 @@ async function doSearch(city) {
         break;
       }
     }
-    dbg('Rozpoznana dzielnica: ' + (geoDistrict || '(brak – szukam w całym mieście)'));
+    dbg('Miasto: ' + (geoCity || '(?)') + ' | Dzielnica: ' + (geoDistrict || '(brak)'));
 
     if (!isMobile) {
       // Przywróć mapę do normalnego widoku
@@ -849,15 +1007,25 @@ async function doSearch(city) {
     dbg('Wyszukuję lokale...');
     try {
       const places = await searchPlaces(location, count, geoBounds, dbg);
+      if (searchAborted) { dbg('Przerwano.'); document.getElementById('stopBtn').style.display = 'none'; document.getElementById('searchBtn').disabled = false; return; }
       dbg('KROK 6: Znaleziono ' + places.length + ' miejsc');
       const detailed = [];
       for (let i = 0; i < places.length; i++) {
+        if (searchAborted) break;
         dbg(`Pobieranie szczegółów (${i+1}/${places.length})...`);
         const detail = await getPlaceDetails(places[i].place_id);
         if (detail && !detail.district && detail.lat && detail.lng) {
           detail.district = await reverseGeocodeDistrict(detail.lat, detail.lng, detail.city);
         }
         if (detail && passesQualityFilter(detail)) {
+          // Filtr miasta: odrzuć lokale z innego miasta
+          if (geoCity) {
+            const detailCity = (detail.city || '').toLowerCase().trim();
+            const targetCity = geoCity.toLowerCase().trim();
+            if (detailCity && detailCity !== targetCity) {
+              continue; // inne miasto — pomiń
+            }
+          }
           // Filtr dzielnicy: odrzuć tylko jeśli lokal MA rozpoznaną dzielnicę
           // i jest ona INNA niż szukana. Jeśli brak dzielnicy — akceptuj
           let matchesDistrict = true;
@@ -881,12 +1049,22 @@ async function doSearch(city) {
       renderResults(results);
       if (!isMobile) addMarkers(results);
       updateStats(results);
+      renderAnalytics(results);
       document.getElementById('exportBtn').disabled = false;
+      document.getElementById('stopBtn').style.display = 'none';
       document.getElementById('debugBar').style.display = 'none';
+
+      // Szukaj emaili w tle (jeśli backend skonfigurowany)
+      if (EMAIL_SCRAPER_URL && !searchAborted && document.getElementById('emailCheckbox').checked) {
+        scrapeEmails(results, dbg).then(() => {
+          document.getElementById('debugBar').style.display = 'none';
+        });
+      }
     } catch (err) {
       dbg('BŁĄD wyszukiwania: ' + err.message);
     }
     document.getElementById('searchBtn').disabled = false;
+    document.getElementById('stopBtn').style.display = 'none';
   });
 } // end doSearch
 
@@ -899,6 +1077,41 @@ const BAD_TYPES = [
 ];
 const GOOD_TYPES = ['cafe', 'restaurant', 'bar', 'bakery'];
 
+// Wykluczone typy dla trybu "Firmy"
+const COMPANY_BAD_TYPES = [
+  // Sklepy / markety
+  'store','supermarket','grocery_or_supermarket','convenience_store','shopping_mall',
+  'clothing_store','shoe_store','jewelry_store','book_store','hardware_store',
+  'home_goods_store','furniture_store','electronics_store','pet_store','florist',
+  'liquor_store','bicycle_store','department_store','drugstore',
+  // Szkoły / edukacja
+  'school','primary_school','secondary_school','university','library',
+  // Kościoły / miejsca kultu
+  'church','mosque','synagogue','hindu_temple','place_of_worship',
+  // Szpitale / przychodnie
+  'hospital','doctor','dentist','physiotherapist','pharmacy','veterinary_care',
+  // Stacje benzynowe
+  'gas_station',
+  // Bankomaty
+  'atm',
+  // Salony fryzjerskie / kosmetyczne
+  'hair_care','beauty_salon','spa',
+  // Siłownie / fitness
+  'gym',
+  // Transport / infrastruktura
+  'transit_station','bus_station','train_station','airport','parking','taxi_stand',
+  'subway_station','light_rail_station',
+  // Gastronomia (osobne chipy) — bez bakery (przepuszczamy)
+  'restaurant','cafe','bar','meal_delivery','meal_takeaway',
+  // Inne nierelewantne
+  'campground','rv_park','cemetery','funeral_home',
+  'laundry','locksmith','car_wash','car_repair','car_rental',
+  'casino','night_club','amusement_park','aquarium','zoo','museum',
+  'movie_theater','bowling_alley','stadium','park','tourist_attraction',
+  'local_government_office','courthouse','city_hall','police','fire_station',
+  'post_office','storage','moving_company'
+];
+
 // ── WARSTWA 2: Czarna lista nazw sieci ──
 const BLACKLIST_NAMES = [
   'żabka','zabka','orlen','bp stacja','shell','circle k','lotos stacja',
@@ -910,14 +1123,35 @@ const BLACKLIST_NAMES = [
   'gorąco polecam','goraco polecam'
 ];
 
+// Czarna lista nazw dla trybu "Firmy" — sieciowe banki, hotele, piekarnie
+const COMPANY_BLACKLIST_NAMES = [
+  // Banki sieciowe
+  'pko','mbank','ing bank','santander','bnp paribas','millennium','pekao',
+  'credit agricole','alior bank','nest bank','citi handlowy','getin',
+  'bank pocztowy','plus bank','velo bank',
+  // Hotele sieciowe
+  'hilton','marriott','ibis','novotel','mercure','accor','radisson',
+  'best western','holiday inn','sheraton','hyatt','crowne plaza',
+  'hampton','courtyard','premier inn','b&b hotel','motel one','wyndham',
+  // Piekarnie sieciowe
+  'oskroba','putka','grzybki','piwoński','piwonski','gromulski',
+  'paul bakery','lajkonik','schulstad'
+];
+
 function isBlacklisted(place) {
   const types = place.types || [];
-  const hasGoodType = types.some(t => GOOD_TYPES.includes(t));
-  // Warstwa 1: wyklucz tylko jeśli ma zły typ I nie ma dobrego
-  if (!hasGoodType && types.some(t => BAD_TYPES.includes(t))) return true;
-  // Warstwa 2: czarna lista nazw
   const nameLower = (place.name || '').toLowerCase();
-  if (BLACKLIST_NAMES.some(b => nameLower.includes(b))) return true;
+
+  if (activeChip === 'company') {
+    // Tryb firmowy: wyklucz niechciane typy + sieciówki
+    if (types.some(t => COMPANY_BAD_TYPES.includes(t))) return true;
+    if (COMPANY_BLACKLIST_NAMES.some(b => nameLower.includes(b))) return true;
+  } else {
+    // Tryb gastronomiczny
+    const hasGoodType = types.some(t => GOOD_TYPES.includes(t));
+    if (!hasGoodType && types.some(t => BAD_TYPES.includes(t))) return true;
+    if (BLACKLIST_NAMES.some(b => nameLower.includes(b))) return true;
+  }
   return false;
 }
 
@@ -934,62 +1168,107 @@ function passesQualityFilter(detail) {
 async function searchPlaces(location, totalNeeded, geoBounds, dbg) {
   const cityInput = document.getElementById('cityInput').value.trim();
   const typeMap = {
-    cafe:             { type: 'cafe', keyword: 'kawiarnia' },
-    restaurant:       { type: 'restaurant', keyword: 'restauracja' },
-    hotel_restaurant: { type: 'restaurant', keyword: 'restauracja hotelowa' },
+    cafe:             { type: 'cafe', keywords: ['kawiarnia'] },
+    restaurant:       { type: 'restaurant', keywords: ['restauracja'] },
+    hotel_restaurant: { type: 'restaurant', keywords: ['restauracja hotelowa'] },
+    company:          { type: 'establishment', keywords: [
+      'kancelaria prawna',
+      'agencja marketingowa',
+      'agencja reklamowa',
+      'software house',
+      'firma IT',
+      'doradztwo consulting',
+      'biuro architektoniczne',
+      'agencja nieruchomości',
+      'firma szkoleniowa',
+      'agencja eventowa',
+      'agencja PR',
+      'firma budowlana',
+      'biuro projektowe',
+      'salon samochodowy',
+      'hotel boutique',
+      'piekarnia rzemieślnicza',
+    ]},
   };
-  const { type, keyword } = typeMap[activeChip];
+  const { type, keywords } = typeMap[activeChip];
 
-  // Strategia: nearbySearch z rankBy=DISTANCE z kilku punktów w siatce
-  const searchPoints = [location];
+  // Adaptacyjna siatka punktów wyszukiwania
+  const searchPoints = [];
 
   if (geoBounds) {
     const ne = geoBounds.getNorthEast();
     const sw = geoBounds.getSouthWest();
-    const cLat = (ne.lat() + sw.lat()) / 2;
-    const cLng = (ne.lng() + sw.lng()) / 2;
-    const dLat = (ne.lat() - sw.lat()) / 4;
-    const dLng = (ne.lng() - sw.lng()) / 4;
-    searchPoints.push(
-      new google.maps.LatLng(cLat + dLat, cLng),
-      new google.maps.LatLng(cLat - dLat, cLng),
-      new google.maps.LatLng(cLat, cLng + dLng),
-      new google.maps.LatLng(cLat, cLng - dLng)
-    );
+    const latSpan = ne.lat() - sw.lat();
+    const lngSpan = ne.lng() - sw.lng();
+    const diagKm = Math.sqrt(latSpan * latSpan + lngSpan * lngSpan) * 111;
+
+    // Gęstość siatki zależy od wielkości obszaru i liczby żądanych wyników
+    // Małe (<5km, dzielnica): 2×2, średnie (<15km): 3×3, duże (miasto): 4×4, mega: 5×5
+    let gridSize;
+    if (diagKm < 5) gridSize = 2;
+    else if (diagKm < 12) gridSize = 3;
+    else if (diagKm < 25) gridSize = 4;
+    else gridSize = 5;
+
+    // Zagęść jeśli użytkownik chce dużo wyników
+    if (totalNeeded > 80 && gridSize < 4) gridSize = 4;
+    if (totalNeeded > 150 && gridSize < 5) gridSize = 5;
+
+    for (let r = 0; r < gridSize; r++) {
+      for (let c = 0; c < gridSize; c++) {
+        const lat = sw.lat() + latSpan * (r + 0.5) / gridSize;
+        const lng = sw.lng() + lngSpan * (c + 0.5) / gridSize;
+        searchPoints.push(new google.maps.LatLng(lat, lng));
+      }
+    }
+    if (dbg) dbg(`Siatka ${gridSize}×${gridSize} = ${searchPoints.length} punktów (~${diagKm.toFixed(0)} km)`);
+  } else {
+    searchPoints.push(location);
   }
 
   const seenIds = new Set();
   let allPlaces = [];
 
-  for (let idx = 0; idx < searchPoints.length; idx++) {
-    const point = searchPoints[idx];
-    if (dbg) dbg(`Skanowanie obszaru (${idx+1}/${searchPoints.length})...`);
-    try {
-      const pagePlaces = await new Promise((res, rej) => {
-        placesService.nearbySearch({
-          location: point,
-          rankBy: google.maps.places.RankBy.DISTANCE,
-          type,
-          keyword,
-        }, (results, status) => {
-          if (status === google.maps.places.PlacesServiceStatus.OK && results) {
-            res(results);
-          } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-            res([]);
-          } else {
-            rej(new Error('Places API error: ' + status));
-          }
-        });
-      });
+  // Dla trybu company: mniej punktów siatki, więcej keywordów
+  // Dla gastro: pełna siatka, jeden keyword
+  const isCompany = (keywords.length > 1);
+  const pointsToUse = isCompany ? searchPoints.slice(0, Math.min(searchPoints.length, 4)) : searchPoints;
+  const totalSteps = pointsToUse.length * keywords.length;
+  let step = 0;
 
-      for (const p of pagePlaces) {
-        if (!isBlacklisted(p) && !seenIds.has(p.place_id)) {
-          seenIds.add(p.place_id);
-          allPlaces.push(p);
+  for (const kw of keywords) {
+    if (searchAborted) break;
+    for (const point of pointsToUse) {
+      if (searchAborted) break;
+      step++;
+      if (dbg) dbg(`Skanowanie (${step}/${totalSteps}): "${kw}"... znaleziono ${allPlaces.length}`);
+      try {
+        const pagePlaces = await new Promise((res, rej) => {
+          placesService.nearbySearch({
+            location: point,
+            rankBy: google.maps.places.RankBy.DISTANCE,
+            type,
+            keyword: kw,
+          }, (results, status) => {
+            if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+              res(results);
+            } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+              res([]);
+            } else {
+              rej(new Error('Places API error: ' + status));
+            }
+          });
+        });
+
+        for (const p of pagePlaces) {
+          if (!isBlacklisted(p) && !seenIds.has(p.place_id)) {
+            seenIds.add(p.place_id);
+            allPlaces.push(p);
+          }
         }
+      } catch (e) {
+        console.warn(`[GastroFinder] Błąd:`, e.message);
       }
-    } catch (e) {
-      console.warn(`[GastroFinder] Błąd dla punktu:`, e.message);
     }
   }
 
@@ -1034,7 +1313,7 @@ function getPlaceDetails(placeId) {
       'place_id','name','rating','user_ratings_total',
       'formatted_address','address_components',
       'formatted_phone_number','website','url','geometry',
-      'business_status'
+      'business_status','types'
     ];
     placesService.getDetails({ placeId, fields }, (place, status) => {
       if (status === google.maps.places.PlacesServiceStatus.OK && place) {
@@ -1066,6 +1345,57 @@ function parsePlace(p) {
   const streetNo  = get(['street_number']);
   const streetFull = street ? (streetNo ? `${street} ${streetNo}` : street) : '';
 
+  // Branża — tłumaczenie typów Google na polski
+  const typeTranslations = {
+    lawyer: 'Kancelaria prawna',
+    accounting: 'Księgowość / Rachunkowość',
+    insurance_agency: 'Ubezpieczenia',
+    real_estate_agency: 'Nieruchomości',
+    travel_agency: 'Biuro podróży',
+    employment_agency: 'Agencja pracy',
+    finance: 'Finanse',
+    bank: 'Bank',
+    car_dealer: 'Salon samochodowy',
+    lodging: 'Hotel',
+    bakery: 'Piekarnia',
+    dentist: 'Dentysta',
+    doctor: 'Lekarz',
+    physiotherapist: 'Fizjoterapia',
+    veterinary_care: 'Weterynarz',
+    moving_company: 'Firma przeprowadzkowa',
+    painter: 'Malarz',
+    plumber: 'Hydraulik',
+    electrician: 'Elektryk',
+    roofing_contractor: 'Dekarz',
+    general_contractor: 'Firma budowlana',
+    establishment: 'Firma',
+    point_of_interest: '',
+    food: 'Gastronomia',
+    store: 'Sklep',
+    health: 'Zdrowie',
+    local_government_office: 'Urząd',
+  };
+
+  let industry = '';
+  if (p.types && p.types.length) {
+    // Znajdź pierwszy typ który ma tłumaczenie i nie jest generyczny
+    const skipGeneric = ['establishment','point_of_interest','premise','political','route',
+                         'street_address','geocode','sublocality','locality'];
+    for (const t of p.types) {
+      if (skipGeneric.includes(t)) continue;
+      if (typeTranslations[t]) { industry = typeTranslations[t]; break; }
+    }
+    // Jeśli nie znaleźliśmy tłumaczenia — użyj pierwszego nietypowego tagu
+    if (!industry) {
+      for (const t of p.types) {
+        if (skipGeneric.includes(t)) continue;
+        industry = t.replace(/_/g, ' ');
+        industry = industry.charAt(0).toUpperCase() + industry.slice(1);
+        break;
+      }
+    }
+  }
+
   return {
     name: p.name || '',
     rating: p.rating || 0,
@@ -1081,6 +1411,7 @@ function parsePlace(p) {
     googleUrl: p.url || '',
     lat: p.geometry?.location?.lat(),
     lng: p.geometry?.location?.lng(),
+    industry,
   };
 }
 
@@ -1161,12 +1492,15 @@ function renderResults(data) {
     return;
   }
 
+  const isCompanyMode = (activeChip === 'company');
+
   const rows = data.map((p, i) => {
     const score = (p.rating * Math.log10(p.reviews + 1)).toFixed(1);
     return `
     <tr onclick="focusMarker(${i})">
       <td class="rank-cell">#${i+1}</td>
       <td class="name-cell" title="${escAttr(p.name)}">${esc(p.name)}</td>
+      ${isCompanyMode ? `<td>${esc(p.industry || '—')}</td>` : ''}
       <td><span class="rating-badge"><span class="star">★</span>${p.rating.toFixed(1)}</span></td>
       <td class="reviews-count">${p.reviews.toLocaleString('pl')}</td>
       <td><strong>${score}</strong></td>
@@ -1175,6 +1509,7 @@ function renderResults(data) {
       <td>${esc(p.district)}</td>
       <td title="${escAttr(p.street)}">${esc(p.street)}</td>
       <td>${esc(p.phone)}</td>
+      <td class="link-cell">${p.email ? `<a href="mailto:${escAttr(p.email)}">${esc(p.email)}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td class="link-cell">${p.website && /^https?:\/\//i.test(p.website) ? `<a href="${escAttr(p.website)}" target="_blank" rel="noopener noreferrer">↗ www</a>` : '—'}</td>
     </tr>`;
   }).join('');
@@ -1185,6 +1520,7 @@ function renderResults(data) {
         <tr>
           <th>#</th>
           <th>Nazwa</th>
+          ${isCompanyMode ? '<th>Branża</th>' : ''}
           <th>Ocena</th>
           <th>Liczba opinii</th>
           <th>Wynik</th>
@@ -1193,6 +1529,7 @@ function renderResults(data) {
           <th>Dzielnica</th>
           <th>Ulica</th>
           <th>Telefon</th>
+          <th>E-mail</th>
           <th>Strona WWW</th>
         </tr>
       </thead>
@@ -1209,7 +1546,7 @@ function focusMarker(idx) {
 }
 
 function typeLabel(t) {
-  return { cafe: 'Kawiarnie', restaurant: 'Restauracje', hotel_restaurant: 'Restauracje hotelowe' }[t] || t;
+  return { cafe: 'Kawiarnie', restaurant: 'Restauracje', hotel_restaurant: 'Restauracje hotelowe', company: 'Firmy' }[t] || t;
 }
 
 // ── STATS ──
@@ -1220,42 +1557,299 @@ function updateStats(data) {
   document.getElementById('statAvgRating').textContent = avgRating;
 }
 
+// ── ANALYTICS DASHBOARD ──
+let chartInstances = [];
+
+function destroyCharts() {
+  chartInstances.forEach(c => c.destroy());
+  chartInstances = [];
+}
+
+function renderAnalytics(data) {
+  if (!data.length) {
+    document.getElementById('analyticsPanel').style.display = 'none';
+    return;
+  }
+  document.getElementById('analyticsPanel').style.display = 'block';
+  destroyCharts();
+
+  const accent = '#D97757';
+  const accent2 = '#C4623E';
+  const accentLight = 'rgba(217,119,87,0.15)';
+  const green = '#3A9E6E';
+  const muted = '#7A776F';
+  const chartFont = { family: "'Inter', sans-serif", size: 11, color: '#1A1915' };
+
+  Chart.defaults.font.family = chartFont.family;
+  Chart.defaults.font.size = chartFont.size;
+  Chart.defaults.color = muted;
+
+  // ── Summary cards ──
+  const avgRating = (data.reduce((s,p) => s+p.rating, 0) / data.length).toFixed(2);
+  const totalReviews = data.reduce((s,p) => s+p.reviews, 0);
+  const avgScore = (data.reduce((s,p) => s + p.rating * Math.log10(p.reviews+1), 0) / data.length).toFixed(1);
+  const topPlace = data[0];
+  const districts = [...new Set(data.map(p => p.district).filter(Boolean))];
+
+  document.getElementById('summaryCards').innerHTML = `
+    <div class="a-card">
+      <div class="a-card-val">${data.length}</div>
+      <div class="a-card-lbl">Lokali</div>
+    </div>
+    <div class="a-card">
+      <div class="a-card-val">${avgRating}</div>
+      <div class="a-card-lbl">Śr. ocena</div>
+    </div>
+    <div class="a-card">
+      <div class="a-card-val">${totalReviews.toLocaleString('pl')}</div>
+      <div class="a-card-lbl">Łącznie opinii</div>
+    </div>
+    <div class="a-card">
+      <div class="a-card-val">${avgScore}</div>
+      <div class="a-card-lbl">Śr. Wynik</div>
+    </div>`;
+
+  // ── Chart 1: Rozkład ocen (histogram) ──
+  const ratingBuckets = [
+    { label: '3.0–3.4', min: 3.0, max: 3.45 },
+    { label: '3.5–3.9', min: 3.45, max: 3.95 },
+    { label: '4.0–4.2', min: 3.95, max: 4.25 },
+    { label: '4.3–4.5', min: 4.25, max: 4.55 },
+    { label: '4.6–4.8', min: 4.55, max: 4.85 },
+    { label: '4.9–5.0', min: 4.85, max: 5.01 },
+  ];
+  const ratingCounts = ratingBuckets.map(b => data.filter(p => p.rating >= b.min && p.rating < b.max).length);
+
+  chartInstances.push(new Chart(document.getElementById('chartRatings'), {
+    type: 'bar',
+    data: {
+      labels: ratingBuckets.map(b => b.label),
+      datasets: [{
+        data: ratingCounts,
+        backgroundColor: ratingBuckets.map((_, i) => {
+          const intensity = 0.3 + (i / (ratingBuckets.length - 1)) * 0.7;
+          return `rgba(217,119,87,${intensity})`;
+        }),
+        borderRadius: 4,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        x: { grid: { display: false } }
+      }
+    }
+  }));
+
+  // ── Chart 2: Top 5 vs reszta ──
+  const top5 = data.slice(0, 5);
+  const rest = data.slice(5);
+  const top5Avg = top5.length ? (top5.reduce((s,p) => s+p.rating, 0) / top5.length).toFixed(2) : 0;
+  const restAvg = rest.length ? (rest.reduce((s,p) => s+p.rating, 0) / rest.length).toFixed(2) : 0;
+  const top5Rev = top5.length ? Math.round(top5.reduce((s,p) => s+p.reviews, 0) / top5.length) : 0;
+  const restRev = rest.length ? Math.round(rest.reduce((s,p) => s+p.reviews, 0) / rest.length) : 0;
+
+  chartInstances.push(new Chart(document.getElementById('chartTopVsRest'), {
+    type: 'bar',
+    data: {
+      labels: ['Śr. ocena', 'Śr. opinii (÷100)'],
+      datasets: [
+        {
+          label: 'Top 5',
+          data: [top5Avg, (top5Rev / 100).toFixed(1)],
+          backgroundColor: accent,
+          borderRadius: 4,
+        },
+        {
+          label: 'Pozostałe',
+          data: [restAvg, (restRev / 100).toFixed(1)],
+          backgroundColor: 'rgba(217,119,87,0.25)',
+          borderRadius: 4,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } },
+      scales: {
+        y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } },
+        x: { grid: { display: false } }
+      }
+    }
+  }));
+
+  // ── Chart 3: Rozkład wyników (scatter) ──
+  const scatterData = data.map(p => ({
+    x: p.reviews,
+    y: p.rating,
+    label: p.name,
+  }));
+
+  chartInstances.push(new Chart(document.getElementById('chartScores'), {
+    type: 'bubble',
+    data: {
+      datasets: [{
+        data: scatterData.map(d => ({
+          x: d.x,
+          y: d.y,
+          r: Math.max(4, Math.min(18, d.x / (data.reduce((s,p)=>s+p.reviews,0)/data.length) * 8)),
+        })),
+        backgroundColor: 'rgba(217,119,87,0.35)',
+        borderColor: accent,
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const d = scatterData[ctx.dataIndex];
+              return `${d.label}: ★${d.y} · ${d.x} opinii`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Liczba opinii', font: { size: 10 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        y: { title: { display: true, text: 'Ocena', font: { size: 10 } }, min: 3.0, max: 5.1, grid: { color: 'rgba(0,0,0,0.05)' } }
+      }
+    }
+  }));
+
+  // ── Chart 4: Pokrycie dzielnic ──
+  const districtCounts = {};
+  data.forEach(p => {
+    const d = p.district || '(brak danych)';
+    districtCounts[d] = (districtCounts[d] || 0) + 1;
+  });
+  const sortedDistricts = Object.entries(districtCounts).sort((a,b) => b[1] - a[1]);
+  const districtColors = sortedDistricts.map((_, i) => {
+    const intensity = 0.3 + (1 - i / Math.max(sortedDistricts.length - 1, 1)) * 0.7;
+    return `rgba(217,119,87,${intensity})`;
+  });
+
+  chartInstances.push(new Chart(document.getElementById('chartDistricts'), {
+    type: sortedDistricts.length > 8 ? 'bar' : 'doughnut',
+    data: {
+      labels: sortedDistricts.map(d => d[0]),
+      datasets: [{
+        data: sortedDistricts.map(d => d[1]),
+        backgroundColor: districtColors,
+        borderWidth: sortedDistricts.length > 8 ? 0 : 2,
+        borderColor: '#fff',
+        borderRadius: sortedDistricts.length > 8 ? 4 : 0,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: sortedDistricts.length > 8
+          ? { display: false }
+          : { position: 'right', labels: { boxWidth: 10, padding: 6, font: { size: 10 } } }
+      },
+      ...(sortedDistricts.length > 8 ? {
+        indexAxis: 'y',
+        scales: {
+          x: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: 'rgba(0,0,0,0.05)' } },
+          y: { grid: { display: false } }
+        }
+      } : {})
+    }
+  }));
+}
+
+// ── EMAIL SCRAPER ──
+async function scrapeEmails(data, dbg) {
+  if (!EMAIL_SCRAPER_URL) return; // backend nie skonfigurowany
+  const withWebsite = data.filter(p => p.website && /^https?:\/\//i.test(p.website));
+  if (!withWebsite.length) return;
+
+  if (dbg) dbg(`Szukanie adresów email (0/${withWebsite.length})...`);
+
+  let found = 0;
+  for (let i = 0; i < withWebsite.length; i++) {
+    if (searchAborted) break;
+    const place = withWebsite[i];
+    if (dbg) dbg(`Szukanie email (${i+1}/${withWebsite.length}): ${place.name}...`);
+    try {
+      const resp = await fetch(`${EMAIL_SCRAPER_URL}?url=${encodeURIComponent(place.website)}`, {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.emails && json.emails.length > 0) {
+          const email = json.emails[0];
+          // Walidacja formatu emaila z backendu
+          if (typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length < 80) {
+            place.email = email;
+            found++;
+          }
+        }
+      }
+    } catch (e) {
+      // Timeout lub błąd sieci — pomijamy
+    }
+    await sleep(100); // nie zalewamy serwera
+  }
+
+  if (dbg) dbg(`Znaleziono ${found} adresów email`);
+
+  // Odśwież tabelę z emailami
+  renderResults(data);
+}
+
 // ── EXCEL EXPORT ──
 function exportExcel() {
   if (!results.length) return;
 
   const city = document.getElementById('cityInput').value;
   const typeL = typeLabel(activeChip);
+  const isCompanyMode = (activeChip === 'company');
+
+  const headers = isCompanyMode
+    ? ['#', 'Nazwa', 'Branża', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Kraj', 'Miasto', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW', 'Google Maps']
+    : ['#', 'Nazwa', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Kraj', 'Miasto', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW', 'Google Maps'];
 
   const wsData = [
-    ['#', 'Nazwa', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Kraj', 'Miasto', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW', 'Google Maps'],
-    ...results.map((p, i) => [
-      i + 1, p.name, p.rating, p.reviews,
-      parseFloat((p.rating * Math.log10(p.reviews + 1)).toFixed(1)),
-      p.country, p.city, p.district, p.street,
-      p.phone, p.email, p.website, p.googleUrl
-    ])
+    headers,
+    ...results.map((p, i) => {
+      const base = [
+        i + 1, p.name,
+        ...(isCompanyMode ? [p.industry || ''] : []),
+        p.rating, p.reviews,
+        parseFloat((p.rating * Math.log10(p.reviews + 1)).toFixed(1)),
+        p.country, p.city, p.district, p.street,
+        p.phone, p.email, p.website, p.googleUrl
+      ];
+      return base;
+    })
   ];
 
   const ws = XLSX.utils.aoa_to_sheet(wsData);
 
-  // Column widths
-  ws['!cols'] = [
-    {wch:5},{wch:35},{wch:12},{wch:14},{wch:8},{wch:12},{wch:16},{wch:20},{wch:28},{wch:18},{wch:22},{wch:32},{wch:40}
-  ];
+  ws['!cols'] = isCompanyMode
+    ? [{wch:5},{wch:35},{wch:22},{wch:12},{wch:14},{wch:8},{wch:12},{wch:16},{wch:20},{wch:28},{wch:18},{wch:22},{wch:32},{wch:40}]
+    : [{wch:5},{wch:35},{wch:12},{wch:14},{wch:8},{wch:12},{wch:16},{wch:20},{wch:28},{wch:18},{wch:22},{wch:32},{wch:40}];
 
-  // Header style (best effort – xlsx-style not in free SheetJS)
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Lokale');
+  XLSX.utils.book_append_sheet(wb, ws, isCompanyMode ? 'Firmy' : 'Lokale');
 
-  // Meta sheet
   const metaData = [
     ['Raport wygenerowany przez', 'Gastro Finder'],
     ['Data', new Date().toLocaleDateString('pl-PL')],
-    ['Typ lokalu', typeL],
+    ['Typ wyszukiwania', typeL],
     ['Wyszukiwana lokalizacja', city],
     ['Liczba wyników', results.length],
-    ['Uwaga', 'Adres e-mail nie jest udostępniany przez Google Places API'],
   ];
   const wsMeta = XLSX.utils.aoa_to_sheet(metaData);
   wsMeta['!cols'] = [{wch:28},{wch:40}];
