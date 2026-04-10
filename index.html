@@ -507,6 +507,117 @@
     flex-shrink: 0;
   }
 
+  /* ── WIDOK: LISTA / SKUPISKA / HEATMAPA ── */
+  .view-toggle {
+    display: flex;
+    gap: 5px;
+  }
+  .view-btn {
+    flex: 1;
+    padding: 7px 4px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-muted);
+    font-family: 'Inter', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+  .view-btn:hover { border-color: var(--accent); color: var(--text); }
+  .view-btn.active { border-color: var(--accent); background: rgba(217,119,87,0.1); color: var(--accent); }
+  .view-btn .vbicon { font-size: 0.85rem; }
+
+  .cluster-params { display: none; }
+  .cluster-params.visible { display: flex; flex-direction: column; gap: 14px; }
+
+  /* Legenda skupisk */
+  .cluster-legend {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .cluster-legend.visible { display: flex; }
+  .cluster-legend-title {
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+  }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .legend-dot {
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* Panel skupisk — info o klikniętym klastrze */
+  .cluster-info-bar {
+    display: none;
+    padding: 10px 18px;
+    background: rgba(217,119,87,0.07);
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.82rem;
+  }
+  .cluster-info-bar.visible { display: flex; }
+  .cluster-info-bar strong { color: var(--accent); }
+  .cluster-clear-btn {
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .cluster-clear-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Przycisk eksportu skupiska */
+  .btn-cluster-export {
+    width: 100%;
+    padding: 10px;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+  }
+  .btn-cluster-export:hover { background: rgba(217,119,87,0.07); border-color: var(--accent); }
+  .btn-cluster-export.visible { display: flex; }
+
   /* ── SCROLLBAR ── */
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -632,6 +743,7 @@
         <div class="chip active" data-type="cafe">☕ Kawiarnia</div>
         <div class="chip" data-type="restaurant">🍽️ Restauracja</div>
         <div class="chip" data-type="hotel_restaurant">🏨 Rest. hotelowa</div>
+        <div class="chip" data-type="gastro_all">🍴 Całe gastro</div>
         <div class="chip" data-type="company">🏢 Firmy</div>
       </div>
     </div>
@@ -681,6 +793,60 @@
       <span style="font-size:0.7rem;color:var(--text-muted);">(wolniejsze)</span>
     </label>
 
+    <div class="divider"></div>
+
+    <!-- TRYB WIDOKU -->
+    <div>
+      <div class="field-label">Tryb widoku</div>
+      <div class="view-toggle">
+        <button class="view-btn active" id="viewBtnList" onclick="switchView('list')">
+          <span class="vbicon">📋</span>Lista
+        </button>
+        <button class="view-btn" id="viewBtnCluster" onclick="switchView('cluster')">
+          <span class="vbicon">🎯</span>Skupiska
+        </button>
+        <button class="view-btn" id="viewBtnHeat" onclick="switchView('heatmap')">
+          <span class="vbicon">🌡️</span>Heatmapa
+        </button>
+      </div>
+    </div>
+
+    <!-- PARAMETRY SKUPISK (widoczne tylko w trybie skupisk) -->
+    <div class="cluster-params" id="clusterParams">
+      <div>
+        <div class="field-label">Promień skupiska</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <input type="range" id="clusterRadius" min="30" max="500" step="10" value="100"
+            style="flex:1;accent-color:var(--accent);cursor:pointer;"
+            oninput="document.getElementById('clusterRadiusVal').textContent=this.value+'m'; recomputeClusters();"/>
+          <span id="clusterRadiusVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:44px;">100m</span>
+        </div>
+      </div>
+      <div>
+        <div class="field-label">Min. lokali w skupisku</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <input type="range" id="clusterMin" min="2" max="12" step="1" value="3"
+            style="flex:1;accent-color:var(--accent);cursor:pointer;"
+            oninput="document.getElementById('clusterMinVal').textContent=this.value; recomputeClusters();"/>
+          <span id="clusterMinVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:20px;">3</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="cluster-legend" id="clusterLegend">
+      <div class="cluster-legend-title">Legenda skupisk</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#DC2626;opacity:0.75;"></div>Gorące — 7+ lokali</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#EA580C;opacity:0.7;"></div>Duże — 5–6 lokali</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#CA8A04;opacity:0.65;"></div>Średnie — 4 lokale</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#4D7C0F;opacity:0.6;"></div>Małe — 2–3 lokale</div>
+    </div>
+
+    <!-- EKSPORT SKUPISKA -->
+    <button class="btn-cluster-export" id="clusterExportBtn" onclick="exportCluster()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Eksportuj skupisko do Excel
+    </button>
+
     <div style="display:flex;gap:7px;">
       <button class="btn-primary" id="searchBtn" onclick="startSearch()" style="flex:1;">🔍 Szukaj</button>
       <button class="btn-primary" id="stopBtn" onclick="stopSearch()" style="flex:0 0 48px;background:var(--red);display:none;" title="Zatrzymaj wyszukiwanie">■</button>
@@ -725,6 +891,11 @@
     <div class="results-area">
       <div class="results-header">
         <div class="results-title" id="resultsTitle">Wyniki pojawią się tutaj</div>
+      </div>
+      <!-- Pasek info klikniętego skupiska -->
+      <div class="cluster-info-bar" id="clusterInfoBar">
+        <span id="clusterInfoText">Kliknij skupisko na mapie aby przefiltrować listę</span>
+        <button class="cluster-clear-btn" onclick="clearClusterSelection()">✕ Pokaż wszystkie</button>
       </div>
       <div id="tableContainer">
         <div class="empty-state">
@@ -804,10 +975,430 @@ let activeChip = 'cafe';
 let highlightedRow = null;
 let searchAborted = false;
 
+// ── STAN SKUPISK ──
+let activeView = 'list';          // 'list' | 'cluster'
+let clusterOverlays = [];         // google.maps.Circle + etykiety
+let clusterData = [];             // obliczone skupiska
+let selectedClusterIdx = null;    // indeks klikniętego skupiska
+let heatmapLayer = null;           // google.maps.visualization.HeatmapLayer
+
 function stopSearch() {
   searchAborted = true;
   document.getElementById('stopBtn').style.display = 'none';
   document.getElementById('searchBtn').disabled = false;
+}
+
+// ══════════════════════════════════════════
+// ── PRZEŁĄCZNIK WIDOKU LISTA / SKUPISKA ──
+// ══════════════════════════════════════════
+
+function switchView(view) {
+  activeView = view;
+  document.getElementById('viewBtnList').classList.toggle('active', view === 'list');
+  document.getElementById('viewBtnCluster').classList.toggle('active', view === 'cluster');
+  document.getElementById('viewBtnHeat').classList.toggle('active', view === 'heatmap');
+
+  const clusterParams = document.getElementById('clusterParams');
+  const clusterLegend = document.getElementById('clusterLegend');
+
+  // Zawsze czyść poprzedni stan
+  clearClusterOverlays();
+  clearHeatmap();
+  clearMarkers();
+  document.getElementById('clusterExportBtn').classList.remove('visible');
+  document.getElementById('clusterInfoBar').classList.remove('visible');
+
+  if (view === 'list') {
+    clusterParams.classList.remove('visible');
+    clusterLegend.classList.remove('visible');
+    if (results.length) {
+      addMarkers(results);
+      renderResults(results);
+    }
+  } else if (view === 'cluster') {
+    clusterParams.classList.add('visible');
+    clusterLegend.classList.add('visible');
+    if (results.length) recomputeClusters();
+  } else if (view === 'heatmap') {
+    clusterParams.classList.remove('visible');
+    clusterLegend.classList.remove('visible');
+    if (results.length) {
+      showHeatmap(results);
+      renderResults(results);
+    }
+  }
+}
+
+// ── HEATMAPA ──
+function clearHeatmap() {
+  if (heatmapLayer) {
+    heatmapLayer.setMap(null);
+    heatmapLayer = null;
+  }
+}
+
+function showHeatmap(places) {
+  if (!map || !window.google?.maps?.visualization) return;
+
+  const weightedPoints = places
+    .filter(p => p.lat && p.lng)
+    .map(p => ({
+      location: new google.maps.LatLng(p.lat, p.lng),
+      weight: Math.max(0.2, (p.rating - 3) / 2 * Math.log10(p.reviews + 1)),
+    }));
+
+  heatmapLayer = new google.maps.visualization.HeatmapLayer({
+    data: weightedPoints,
+    map,
+    radius: 35,
+    opacity: 0.75,
+    gradient: [
+      'rgba(0,0,0,0)',
+      'rgba(58,158,110,0.6)',
+      'rgba(217,200,87,0.75)',
+      'rgba(217,150,87,0.85)',
+      'rgba(217,87,87,0.9)',
+      'rgba(180,30,30,1)',
+    ],
+  });
+
+  // Dopasuj zoom do danych
+  if (places.length > 0) {
+    const bounds = new google.maps.LatLngBounds();
+    places.forEach(p => { if (p.lat) bounds.extend({ lat: p.lat, lng: p.lng }); });
+    map.fitBounds(bounds);
+  }
+
+  document.getElementById('resultsTitle').innerHTML =
+    `<strong>Heatmapa</strong> · ${places.length} lokali · intensywność = ocena × log(opinie)`;
+}
+
+// ── ALGORYTM KLASTERYZACJI (grid-based) ──
+// Dla każdego lokalu zliczamy ile innych jest w promieniu R metrów.
+// Następnie grupujemy zachłannie: bierzemy punkt z najwyższą gęstością,
+// tworzymy skupisko, usuwamy z puli — powtarzamy.
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 +
+            Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function computeClusters(places, radiusMeters, minCount) {
+  const remaining = places.map((p, i) => ({ ...p, _idx: i })).filter(p => p.lat && p.lng);
+  const clusters = [];
+
+  while (remaining.length > 0) {
+    // Znajdź punkt z największą liczbą sąsiadów w promieniu
+    let bestI = 0;
+    let bestNeighbors = [];
+
+    for (let i = 0; i < remaining.length; i++) {
+      const neighbors = remaining.filter(q =>
+        haversineMeters(remaining[i].lat, remaining[i].lng, q.lat, q.lng) <= radiusMeters
+      );
+      if (neighbors.length > bestNeighbors.length) {
+        bestNeighbors = neighbors;
+        bestI = i;
+      }
+    }
+
+    const center = remaining[bestI];
+    const membersInRadius = bestNeighbors;
+
+    // Usuń wszystkich członków skupiska z puli
+    const memberIdxs = new Set(membersInRadius.map(p => p._idx));
+    for (let i = remaining.length - 1; i >= 0; i--) {
+      if (memberIdxs.has(remaining[i]._idx)) remaining.splice(i, 1);
+    }
+
+    if (membersInRadius.length >= minCount) {
+      // Oblicz centroid skupiska
+      const cLat = membersInRadius.reduce((s, p) => s + p.lat, 0) / membersInRadius.length;
+      const cLng = membersInRadius.reduce((s, p) => s + p.lng, 0) / membersInRadius.length;
+      const avgRating = (membersInRadius.reduce((s, p) => s + p.rating, 0) / membersInRadius.length).toFixed(1);
+
+      clusters.push({
+        center: { lat: cLat, lng: cLng },
+        members: membersInRadius,
+        count: membersInRadius.length,
+        avgRating,
+        radius: radiusMeters,
+      });
+    }
+  }
+
+  return clusters.sort((a, b) => b.count - a.count);
+}
+
+function clusterColor(count) {
+  if (count >= 7) return { fillColor: '#DC2626', fillOpacity: 0.13, strokeColor: '#B91C1C', strokeOpacity: 0.7 };
+  if (count >= 5) return { fillColor: '#EA580C', fillOpacity: 0.12, strokeColor: '#C2410C', strokeOpacity: 0.65 };
+  if (count === 4) return { fillColor: '#CA8A04', fillOpacity: 0.11, strokeColor: '#A16207', strokeOpacity: 0.6 };
+  return              { fillColor: '#4D7C0F', fillOpacity: 0.10, strokeColor: '#365314', strokeOpacity: 0.55 };
+}
+
+function clearClusterOverlays() {
+  clusterOverlays.forEach(o => o.setMap(null));
+  clusterOverlays = [];
+}
+
+function recomputeClusters() {
+  if (!results.length || !map) return;
+  const radius = parseInt(document.getElementById('clusterRadius').value);
+  const minCount = parseInt(document.getElementById('clusterMin').value);
+
+  clearClusterOverlays();
+  selectedClusterIdx = null;
+  document.getElementById('clusterInfoBar').classList.remove('visible');
+  document.getElementById('clusterExportBtn').classList.remove('visible');
+
+  clusterData = computeClusters(results, radius, minCount);
+
+  if (!clusterData.length) {
+    document.getElementById('resultsTitle').innerHTML =
+      `<strong>0 skupisk</strong> · zwiększ promień lub zmniejsz min. lokali`;
+    renderClusterTable(results, null);
+    return;
+  }
+
+  // Rysuj skupiska na mapie
+  const bounds = new google.maps.LatLngBounds();
+
+  clusterData.forEach((cl, idx) => {
+    const colors = clusterColor(cl.count);
+
+    const circle = new google.maps.Circle({
+      map,
+      center: cl.center,
+      radius: cl.radius,
+      fillColor: colors.fillColor,
+      fillOpacity: colors.fillOpacity,
+      strokeColor: colors.strokeColor,
+      strokeOpacity: colors.strokeOpacity,
+      strokeWeight: 1.5,
+      clickable: true,
+    });
+
+    circle.addListener('click', () => selectCluster(idx));
+    clusterOverlays.push(circle);
+
+    // Marker-etykieta w centrum skupiska
+    const labelMarker = new google.maps.Marker({
+      map,
+      position: cl.center,
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 0,
+      },
+      label: {
+        text: `${cl.count}`,
+        color: '#ffffff',
+        fontWeight: 'bold',
+        fontSize: '12px',
+      },
+      clickable: true,
+    });
+
+    // Nakładka tekstowa jako InfoWindow (bez X, bez bubble)
+    const iw = new google.maps.InfoWindow({
+      content: `<div style="font-family:'Inter',sans-serif;font-size:12px;font-weight:600;white-space:nowrap;padding:2px 4px;">${cl.count} lokali · ★${cl.avgRating}</div>`,
+      disableAutoPan: true,
+    });
+    iw.open(map, labelMarker);
+
+    labelMarker.addListener('click', () => selectCluster(idx));
+    clusterOverlays.push(labelMarker);
+
+    bounds.extend(cl.center);
+  });
+
+  map.fitBounds(bounds);
+
+  // Zaznacz szare markery poza skupiskami
+  const clusteredIdxs = new Set(clusterData.flatMap(cl => cl.members.map(m => m._idx)));
+  results.forEach((p, i) => {
+    if (!p.lat || clusteredIdxs.has(i)) return;
+    const m = new google.maps.Marker({
+      map,
+      position: { lat: p.lat, lng: p.lng },
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 5,
+        fillColor: '#9CA3AF',
+        fillOpacity: 0.5,
+        strokeColor: '#6B7280',
+        strokeWeight: 1,
+      },
+      title: p.name,
+    });
+    clusterOverlays.push(m);
+  });
+
+  const totalInClusters = clusterData.reduce((s, c) => s + c.count, 0);
+  const outsideCount = results.length - totalInClusters;
+  document.getElementById('resultsTitle').innerHTML =
+    `<strong>${clusterData.length} skupisk</strong> · ${totalInClusters} lokali w skupiskach · ${outsideCount} poza`;
+
+  renderClusterTable(results, null);
+}
+
+function selectCluster(idx) {
+  selectedClusterIdx = idx;
+  const cl = clusterData[idx];
+
+  // Podświetl wybrany okrąg
+  clusterData.forEach((_, i) => {
+    const circleObj = clusterOverlays[i * 2];
+    if (circleObj && circleObj.setOptions) {
+      const colors = clusterColor(clusterData[i].count);
+      circleObj.setOptions({
+        fillOpacity: (i === idx) ? Math.min(colors.fillOpacity * 3, 0.4) : colors.fillOpacity,
+        strokeOpacity: (i === idx) ? Math.min(colors.strokeOpacity * 1.3, 1) : colors.strokeOpacity,
+        strokeWeight: (i === idx) ? 2.5 : 1.5,
+      });
+    }
+  });
+
+  map.panTo(cl.center);
+  map.setZoom(15);
+
+  const bar = document.getElementById('clusterInfoBar');
+  bar.classList.add('visible');
+  document.getElementById('clusterInfoText').innerHTML =
+    `Skupisko <strong>#${idx + 1}</strong>: <strong>${cl.count} lokali</strong> w promieniu ${cl.radius}m · śr. ocena <strong>★${cl.avgRating}</strong>`;
+
+  document.getElementById('clusterExportBtn').classList.add('visible');
+
+  renderClusterTable(cl.members, idx);
+}
+
+function clearClusterSelection() {
+  selectedClusterIdx = null;
+  document.getElementById('clusterInfoBar').classList.remove('visible');
+  document.getElementById('clusterExportBtn').classList.remove('visible');
+
+  // Zresetuj opacity kółek
+  clusterData.forEach((cl, i) => {
+    const circleObj = clusterOverlays[i * 2];
+    if (circleObj && circleObj.setOptions) {
+      const colors = clusterColor(cl.count);
+      circleObj.setOptions({ fillOpacity: colors.fillOpacity, strokeOpacity: colors.strokeOpacity, strokeWeight: 1.5 });
+    }
+  });
+
+  renderClusterTable(results, null);
+}
+
+function renderClusterTable(data, clusterIdx) {
+  const isCompanyMode = (activeChip === 'company');
+  const label = clusterIdx !== null
+    ? `Skupisko #${clusterIdx + 1}`
+    : `Wszystkie lokale (${data.length})`;
+
+  if (!data.length) {
+    document.getElementById('tableContainer').innerHTML =
+      `<div class="empty-state"><div class="empty-icon">🔍</div><div>Brak lokali w skupiskach dla podanych parametrów</div></div>`;
+    return;
+  }
+
+  const rows = data.map((p, i) => {
+    const score = (p.rating * Math.log10(p.reviews + 1)).toFixed(1);
+    // Znajdź do którego skupiska należy ten lokal
+    let clusterBadge = '';
+    if (clusterIdx === null) {
+      const ci = clusterData.findIndex(cl => cl.members.some(m => m._idx === p._idx || m === p));
+      if (ci >= 0) {
+        const colors = clusterColor(clusterData[ci].count);
+        const col = colors.strokeColor;
+        clusterBadge = `<span style="display:inline-block;padding:1px 7px;border-radius:999px;font-size:0.68rem;font-weight:600;background:${col};color:#fff;margin-left:4px;">S${ci+1}</span>`;
+      }
+    }
+    return `
+    <tr onclick="focusMarkerOnCluster(${p.lat},${p.lng})">
+      <td class="rank-cell">#${i+1}${clusterBadge}</td>
+      <td class="name-cell" title="${escAttr(p.name)}">${esc(p.name)}</td>
+      ${isCompanyMode ? `<td>${esc(p.industry || '—')}</td>` : ''}
+      <td><span class="rating-badge"><span class="star">★</span>${p.rating.toFixed(1)}</span></td>
+      <td class="reviews-count">${p.reviews.toLocaleString('pl')}</td>
+      <td><strong>${score}</strong></td>
+      <td>${esc(p.district)}</td>
+      <td title="${escAttr(p.street)}">${esc(p.street)}</td>
+      <td>${esc(p.phone)}</td>
+      <td class="link-cell">${p.email ? `<a href="mailto:${escAttr(p.email)}">${esc(p.email)}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td class="link-cell">${p.website && /^https?:\/\//i.test(p.website) ? `<a href="${escAttr(p.website)}" target="_blank" rel="noopener noreferrer">↗ www</a>` : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('tableContainer').innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Nazwa</th>
+          ${isCompanyMode ? '<th>Branża</th>' : ''}
+          <th>Ocena</th>
+          <th>Opinii</th>
+          <th>Wynik</th>
+          <th>Dzielnica</th>
+          <th>Ulica</th>
+          <th>Telefon</th>
+          <th>E-mail</th>
+          <th>Strona WWW</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function focusMarkerOnCluster(lat, lng) {
+  if (!map || !lat) return;
+  map.panTo({ lat, lng });
+  map.setZoom(17);
+}
+
+function exportCluster() {
+  if (selectedClusterIdx === null || !clusterData[selectedClusterIdx]) return;
+  const cl = clusterData[selectedClusterIdx];
+  const city = document.getElementById('cityInput').value;
+  const isCompanyMode = (activeChip === 'company');
+
+  const headers = isCompanyMode
+    ? ['#', 'Nazwa', 'Branża', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW']
+    : ['#', 'Nazwa', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW'];
+
+  const wsData = [
+    headers,
+    ...cl.members.map((p, i) => [
+      i + 1, p.name,
+      ...(isCompanyMode ? [p.industry || ''] : []),
+      p.rating, p.reviews,
+      parseFloat((p.rating * Math.log10(p.reviews + 1)).toFixed(1)),
+      p.district, p.street, p.phone, p.email || '', p.website || ''
+    ])
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = [{wch:5},{wch:35},{wch:12},{wch:14},{wch:8},{wch:20},{wch:28},{wch:18},{wch:25},{wch:32}];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, `Skupisko ${selectedClusterIdx + 1}`);
+
+  const metaData = [
+    ['Skupisko', `#${selectedClusterIdx + 1}`],
+    ['Liczba lokali', cl.count],
+    ['Promień skupiska', cl.radius + 'm'],
+    ['Śr. ocena', cl.avgRating],
+    ['Lokalizacja', city],
+    ['Data', new Date().toLocaleDateString('pl-PL')],
+  ];
+  const wsMeta = XLSX.utils.aoa_to_sheet(metaData);
+  XLSX.utils.book_append_sheet(wb, wsMeta, 'Info');
+
+  const fileName = `skupisko_${selectedClusterIdx + 1}_${city.replace(/\s+/g,'_').toLowerCase()}_${new Date().toISOString().slice(0,10)}.xlsx`;
+  XLSX.writeFile(wb, fileName);
 }
 
 // ── SECURITY: HTML escape ──
@@ -843,7 +1434,7 @@ function initWithKey() {
 
 function loadGoogleMaps() {
   const script = document.createElement('script');
-  script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=onMapsReady`;
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,visualization&callback=onMapsReady`;
   script.async = true;
   script.onerror = () => alert('Nie można załadować Google Maps. Sprawdź klucz API i upewnij się, że masz włączone Maps JavaScript API + Places API.');
   document.head.appendChild(script);
@@ -1045,9 +1636,19 @@ async function doSearch(city) {
         const scoreB = (b.rating || 0) * Math.log10((b.reviews || 0) + 1);
         return scoreB - scoreA;
       });
-      results = detailed.slice(0, count);
+      results = detailed.slice(0, count).map((p, i) => ({ ...p, _idx: i }));
       renderResults(results);
-      if (!isMobile) addMarkers(results);
+      if (!isMobile) {
+        if (activeView === 'cluster') {
+          clearMarkers();
+          recomputeClusters();
+        } else if (activeView === 'heatmap') {
+          clearMarkers();
+          showHeatmap(results);
+        } else {
+          addMarkers(results);
+        }
+      }
       updateStats(results);
       renderAnalytics(results);
       document.getElementById('exportBtn').disabled = false;
@@ -1168,9 +1769,10 @@ function passesQualityFilter(detail) {
 async function searchPlaces(location, totalNeeded, geoBounds, dbg) {
   const cityInput = document.getElementById('cityInput').value.trim();
   const typeMap = {
-    cafe:             { type: 'cafe', keywords: ['kawiarnia'] },
-    restaurant:       { type: 'restaurant', keywords: ['restauracja'] },
-    hotel_restaurant: { type: 'restaurant', keywords: ['restauracja hotelowa'] },
+    cafe:             { type: 'cafe',          keywords: ['kawiarnia'] },
+    restaurant:       { type: 'restaurant',    keywords: ['restauracja'] },
+    hotel_restaurant: { type: 'restaurant',    keywords: ['restauracja hotelowa'] },
+    gastro_all:       { type: 'food',          keywords: ['restauracja', 'kawiarnia', 'bistro', 'bar', 'pub', 'pizzeria', 'sushi', 'kebab', 'burgers', 'bakery'] },
     company:          { type: 'establishment', keywords: [
       'kancelaria prawna',
       'agencja marketingowa',
@@ -1546,7 +2148,7 @@ function focusMarker(idx) {
 }
 
 function typeLabel(t) {
-  return { cafe: 'Kawiarnie', restaurant: 'Restauracje', hotel_restaurant: 'Restauracje hotelowe', company: 'Firmy' }[t] || t;
+  return { cafe: 'Kawiarnie', restaurant: 'Restauracje', hotel_restaurant: 'Restauracje hotelowe', gastro_all: 'Całe gastro', company: 'Firmy' }[t] || t;
 }
 
 // ── STATS ──
