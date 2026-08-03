@@ -570,6 +570,59 @@
     flex-shrink: 0;
   }
 
+  /* ── LISTA POGRUPOWANA PO SKUPISKACH ── */
+  /* Jedna tabela, po jednym <tbody> na skupisko — kolumny wyrównane między grupami */
+  .cl-nohit {
+    padding: 14px 18px;
+    font-size: 0.83rem;
+    color: var(--text-muted);
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  tr.cl-head > td {
+    padding: 10px 18px;
+    background: var(--surface2);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    white-space: normal;
+    max-width: none;
+  }
+  tr.cl-head { cursor: pointer; }
+  tr.cl-head:hover > td { background: rgba(217,119,87,0.08); }
+  .cl-group.selected tr.cl-head > td { background: rgba(217,119,87,0.14); }
+  .cl-group.selected tr:not(.cl-head) { background: rgba(217,119,87,0.04); }
+
+  .cl-dot {
+    display: inline-block;
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    margin-right: 8px;
+    vertical-align: -1px;
+  }
+  .cl-title { font-size: 0.86rem; font-weight: 600; color: var(--text); }
+  .cl-meta { font-size: 0.79rem; color: var(--text-muted); margin-left: 9px; }
+  .cl-area {
+    font-size: 0.72rem;
+    color: var(--accent);
+    background: rgba(217,119,87,0.1);
+    border-radius: 999px;
+    padding: 2px 9px;
+    margin-left: 9px;
+    white-space: nowrap;
+  }
+
+  /* Sekcja "poza skupiskami" — zwijana */
+  .cl-caret {
+    display: inline-block;
+    margin-right: 8px;
+    color: var(--text-muted);
+    transition: transform 0.15s;
+  }
+  .cl-caret::before { content: '▾'; }
+  .cl-outside.collapsed .cl-caret { transform: rotate(-90deg); }
+  .cl-outside.collapsed tr:not(.cl-head) { display: none; }
+
   /* Panel skupisk — info o klikniętym klastrze */
   .cluster-info-bar {
     display: none;
@@ -705,6 +758,13 @@
     .chart-box { aspect-ratio: 4/3; }
     .analytics-grid { padding: 8px 12px 16px; }
     .analytics-header { padding: 12px 12px 4px; }
+
+    /* Lista pogrupowana po skupiskach */
+    tr.cl-head > td { padding: 8px 12px; }
+    .cl-title { font-size: 0.8rem; }
+    .cl-meta { font-size: 0.72rem; margin-left: 6px; }
+    .cl-area { font-size: 0.68rem; margin-left: 6px; }
+    .cl-nohit { padding: 10px 12px; font-size: 0.76rem; }
 
     /* Ukryj zakładki */
     .mobile-tabs { display: none !important; }
@@ -1052,8 +1112,7 @@ function switchView(view) {
 function refreshCurrentView() {
   if (!results.length) return;
   if (activeView === 'cluster') {
-    const sel = (selectedClusterIdx !== null) ? clusterData[selectedClusterIdx] : null;
-    renderClusterTable(sel ? sel.members : results, sel ? selectedClusterIdx : null);
+    renderClusterGroups();
   } else {
     renderResults(results);
   }
@@ -1192,7 +1251,7 @@ function recomputeClusters() {
   if (!clusterData.length) {
     document.getElementById('resultsTitle').innerHTML =
       `<strong>0 skupisk</strong> · zwiększ promień lub zmniejsz min. lokali`;
-    renderClusterTable(results, null);
+    renderClusterGroups();
     return;
   }
 
@@ -1273,14 +1332,17 @@ function recomputeClusters() {
   });
 
   const totalInClusters = clusterData.reduce((s, c) => s + c.count, 0);
-  const outsideCount = results.length - totalInClusters;
+  const city = document.getElementById('cityInput').value;
   document.getElementById('resultsTitle').innerHTML =
-    `<strong>${clusterData.length} skupisk</strong> · ${totalInClusters} lokali w skupiskach · ${outsideCount} poza`;
+    `<strong>${clusterData.length} ${plSkupisk(clusterData.length)}</strong> · ${totalInClusters} ${plLokal(totalInClusters)}` +
+    ` · ${esc(typeLabel(activeChip))} · ${esc(city)}`;
+  // liczba lokali poza skupiskami jest w nagłówku sekcji "Lokale poza skupiskami"
 
-  renderClusterTable(results, null);
+  renderClusterGroups();
 }
 
-function selectCluster(idx) {
+// scrollToGroup=false przy kliknięciu w nagłówek na liście — użytkownik już tam patrzy
+function selectCluster(idx, scrollToGroup = true) {
   const cl = clusterData[idx];
   if (!cl) return;
   selectedClusterIdx = idx;
@@ -1303,11 +1365,23 @@ function selectCluster(idx) {
   const bar = document.getElementById('clusterInfoBar');
   bar.classList.add('visible');
   document.getElementById('clusterInfoText').innerHTML =
-    `Skupisko <strong>#${idx + 1}</strong>: <strong>${cl.count} lokali</strong> w promieniu ${cl.radius}m · śr. ocena <strong>★${cl.avgRating}</strong>`;
+    `Skupisko <strong>#${idx + 1}</strong>: <strong>${cl.count} ${plLokal(cl.count)}</strong> w promieniu ${cl.radius}m · śr. ocena <strong>★${cl.avgRating}</strong>`;
 
   document.getElementById('clusterExportBtn').classList.add('visible');
 
-  renderClusterTable(cl.members, idx);
+  // Lista jest pogrupowana, więc zamiast filtrować tabelę podświetlamy grupę
+  document.querySelectorAll('.cl-group.selected').forEach(g => g.classList.remove('selected'));
+  const group = document.getElementById('clGroup' + idx);
+  if (group) {
+    group.classList.add('selected');
+    if (scrollToGroup) group.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+// Klik w nagłówek skupiska na liście → wyśrodkuj mapę na tym skupisku
+function focusCluster(idx) {
+  if (!map) return;
+  selectCluster(idx, false);
 }
 
 function clearClusterSelection() {
@@ -1323,79 +1397,156 @@ function clearClusterSelection() {
     circleObj.setOptions({ fillOpacity: colors.fillOpacity, strokeOpacity: colors.strokeOpacity, strokeWeight: 1.5 });
   });
 
-  renderClusterTable(results, null);
+  document.querySelectorAll('.cl-group.selected').forEach(g => g.classList.remove('selected'));
 }
 
 // ══════════════════════════════════════════
 // ── WSPÓLNY RENDERER TABELI ──
-// renderResults i renderClusterTable były niemal identyczne (~90 linii duplikatu).
+// Używany zarówno przez widok Lista (tryb 'full'), jak i przez wiersze lokali
+// wewnątrz grup w widoku Skupiska (tryb 'compact') — jeden renderer, nie dwa.
 // mode 'full'    = widok listy (dodatkowo Kraj i Miasto)
 // mode 'compact' = widok skupisk
 // ══════════════════════════════════════════
-function buildTableHtml(data, { mode = 'full', badgeFor = null, rowClick } = {}) {
+// mode 'full'    = widok listy — pełny zestaw kolumn z Krajem, Miastem i Dzielnicą
+// mode 'compact' = wiersze wewnątrz skupiska — bez Kraju/Miasta/Dzielnicy, bo w obrębie
+//                  jednego skupiska są identyczne dla wszystkich lokali i tylko zajmują miejsce
+// Rozbite na części, żeby widok Skupiska mógł złożyć JEDNĄ tabelę z wieloma
+// sekcjami (osobne <table> per skupisko rozjeżdżałyby szerokości kolumn),
+// nie duplikując przy tym renderowania wiersza.
+function tableColumns(mode) {
   const isCompanyMode = (activeChip === 'company');
   const full = (mode === 'full');
+  return [
+    '#', 'Nazwa',
+    ...(isCompanyMode ? ['Branża'] : []),
+    'Ocena', full ? 'Liczba opinii' : 'Opinii', 'Wynik',
+    ...(full ? ['Kraj', 'Miasto', 'Dzielnica'] : []),
+    'Ulica', 'Telefon', 'E-mail', 'Strona WWW',
+  ];
+}
 
-  const head =
-    '<th>#</th><th>Nazwa</th>' +
-    (isCompanyMode ? '<th>Branża</th>' : '') +
-    '<th>Ocena</th>' +
-    (full ? '<th>Liczba opinii</th>' : '<th>Opinii</th>') +
-    '<th>Wynik</th>' +
-    (full ? '<th>Kraj</th><th>Miasto</th>' : '') +
-    '<th>Dzielnica</th><th>Ulica</th><th>Telefon</th><th>E-mail</th><th>Strona WWW</th>';
+function tableHeadHtml(mode) {
+  return '<tr>' + tableColumns(mode).map(c => `<th>${c}</th>`).join('') + '</tr>';
+}
 
-  const rows = data.map((p, i) => `
+// startIndex — numeracja wierszy startuje od 1 w każdej sekcji skupiska
+function tableRowsHtml(data, mode, rowClick) {
+  const isCompanyMode = (activeChip === 'company');
+  const full = (mode === 'full');
+  return data.map((p, i) => `
     <tr onclick="${rowClick(p, i)}">
-      <td class="rank-cell">#${i + 1}${badgeFor ? badgeFor(p) : ''}</td>
+      <td class="rank-cell">#${i + 1}</td>
       <td class="name-cell" title="${escAttr(p.name)}">${esc(p.name)}</td>
       ${isCompanyMode ? `<td>${esc(p.industry || '—')}</td>` : ''}
       <td><span class="rating-badge"><span class="star">★</span>${(p.rating || 0).toFixed(1)}</span></td>
       <td class="reviews-count">${(p.reviews || 0).toLocaleString('pl')}</td>
       <td><strong>${scoreOf(p).toFixed(1)}</strong></td>
-      ${full ? `<td>${esc(p.country)}</td><td>${esc(p.city)}</td>` : ''}
-      <td>${esc(p.district)}</td>
+      ${full ? `<td>${esc(p.country)}</td><td>${esc(p.city)}</td><td>${esc(p.district)}</td>` : ''}
       <td title="${escAttr(p.street)}">${esc(p.street)}</td>
       <td>${esc(p.phone)}</td>
       <td class="link-cell">${p.email ? `<a href="mailto:${escAttr(p.email)}">${esc(p.email)}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td class="link-cell">${p.website && /^https?:\/\//i.test(p.website) ? `<a href="${escAttr(p.website)}" target="_blank" rel="noopener noreferrer">↗ www</a>` : '—'}</td>
     </tr>`).join('');
+}
 
-  return `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+function buildTableHtml(data, { mode = 'full', rowClick } = {}) {
+  return `<table><thead>${tableHeadHtml(mode)}</thead><tbody>${tableRowsHtml(data, mode, rowClick)}</tbody></table>`;
 }
 
 function emptyState(msg) {
   return `<div class="empty-state"><div class="empty-icon">🔍</div><div>${esc(msg)}</div></div>`;
 }
 
-function renderClusterTable(data, clusterIdx) {
-  if (!data.length) {
-    document.getElementById('tableContainer').innerHTML =
-      emptyState('Brak lokali w skupiskach dla podanych parametrów');
+// Polska odmiana liczebnika — "1 lokal", "4 lokale", "7 lokali"
+function plural(n, one, few, many) {
+  const t = n % 10, s = n % 100;
+  if (n === 1) return one;
+  if (t >= 2 && t <= 4 && !(s >= 12 && s <= 14)) return few;
+  return many;
+}
+const plLokal = (n) => plural(n, 'lokal', 'lokale', 'lokali');
+const plSkupisk = (n) => plural(n, 'skupisko', 'skupiska', 'skupisk');
+
+// Nazwa obszaru skupiska = dominująca ulica wśród jego lokali.
+// Pokazujemy ją TYLKO gdy naprawdę dominuje — inaczej byłaby to zmyślona etykieta.
+function clusterAreaLabel(members) {
+  const counts = new Map();
+  for (const m of members) {
+    // utnij numer budynku: "Zgoda 3" → "Zgoda"
+    const street = (m.street || '').replace(/\s+\d+\S*$/, '').trim();
+    if (!street) continue;
+    counts.set(street, (counts.get(street) || 0) + 1);
+  }
+  if (!counts.size) return '';
+  const [best, n] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  return (n >= 2 && n / members.length >= 0.4) ? best : '';
+}
+
+const CLUSTER_ROW_CLICK = (p) => `focusOnMap(${Number(p.lat) || 0},${Number(p.lng) || 0})`;
+
+// Widok Skupiska: JEDNA tabela, w niej po jednym <tbody> na skupisko.
+// Wiersze lokali renderuje ten sam tableRowsHtml co widok Lista — jeden wspólny
+// nagłówek kolumn gwarantuje, że kolumny są wyrównane we wszystkich grupach.
+function renderClusterGroups() {
+  const el = document.getElementById('tableContainer');
+  const nCols = tableColumns('compact').length;
+
+  const inCluster = new Set();
+  clusterData.forEach(cl => cl.members.forEach(m => inCluster.add(m)));
+  const outside = results.filter(p => !inCluster.has(p))
+                         .sort((a, b) => scoreOf(b) - scoreOf(a));
+
+  // clusterData jest już posortowane malejąco po liczbie lokali (computeClusters)
+  const groups = clusterData.map((cl, idx) => {
+    const members = [...cl.members].sort((a, b) => scoreOf(b) - scoreOf(a));
+    const col = clusterColor(cl.count).strokeColor;   // ten sam kolor co koło na mapie
+    const area = clusterAreaLabel(members);
+    return `
+      <tbody class="cl-group" id="clGroup${idx}">
+        <tr class="cl-head" onclick="focusCluster(${idx})" title="Wyśrodkuj mapę na tym skupisku">
+          <td colspan="${nCols}">
+            <span class="cl-dot" style="background:${col};"></span>
+            <span class="cl-title">Skupisko ${idx + 1}</span>
+            <span class="cl-meta">${cl.count} ${plLokal(cl.count)} · śr. ocena ★${cl.avgRating}</span>
+            ${area ? `<span class="cl-area">${esc(area)}</span>` : ''}
+          </td>
+        </tr>
+        ${tableRowsHtml(members, 'compact', CLUSTER_ROW_CLICK)}
+      </tbody>`;
+  }).join('');
+
+  const outsideHtml = outside.length ? `
+      <tbody class="cl-outside collapsed" id="clOutside">
+        <tr class="cl-head" onclick="toggleOutside()">
+          <td colspan="${nCols}">
+            <span class="cl-caret"></span>
+            <span class="cl-title">Lokale poza skupiskami</span>
+            <span class="cl-meta">${outside.length}</span>
+          </td>
+        </tr>
+        ${tableRowsHtml(outside, 'compact', CLUSTER_ROW_CLICK)}
+      </tbody>` : '';
+
+  if (!clusterData.length && !outside.length) {
+    el.innerHTML = emptyState('Brak wyników dla podanych kryteriów');
     return;
   }
 
-  // Przypisanie lokal → numer skupiska liczone RAZ.
-  // Wcześniej każdy wiersz robił findIndex + some po wszystkich skupiskach — O(n²).
-  let badgeFor = null;
-  if (clusterIdx === null && clusterData.length) {
-    const clusterOfPlace = new Map();
-    clusterData.forEach((cl, ci) => cl.members.forEach(m => {
-      if (!clusterOfPlace.has(m)) clusterOfPlace.set(m, ci);
-    }));
-    badgeFor = (p) => {
-      const ci = clusterOfPlace.get(p);
-      if (ci === undefined) return '';
-      const col = clusterColor(clusterData[ci].count).strokeColor;
-      return `<span style="display:inline-block;padding:1px 7px;border-radius:999px;font-size:0.68rem;font-weight:600;background:${col};color:#fff;margin-left:4px;">S${ci + 1}</span>`;
-    };
-  }
+  const hint = clusterData.length ? '' :
+    `<div class="cl-nohit">Brak skupisk dla podanych parametrów — zwiększ promień lub zmniejsz min. lokali</div>`;
 
-  document.getElementById('tableContainer').innerHTML = buildTableHtml(data, {
-    mode: 'compact',
-    badgeFor,
-    rowClick: (p) => `focusOnMap(${Number(p.lat) || 0},${Number(p.lng) || 0})`,
-  });
+  el.innerHTML = hint +
+    `<table class="cl-table"><thead>${tableHeadHtml('compact')}</thead>${groups}${outsideHtml}</table>`;
+
+  // Przywróć podświetlenie, jeśli jakieś skupisko było wybrane na mapie
+  if (selectedClusterIdx !== null) {
+    document.getElementById('clGroup' + selectedClusterIdx)?.classList.add('selected');
+  }
+}
+
+// Sekcja "poza skupiskami" — domyślnie zwinięta
+function toggleOutside() {
+  document.getElementById('clOutside')?.classList.toggle('collapsed');
 }
 
 function focusOnMap(lat, lng) {
