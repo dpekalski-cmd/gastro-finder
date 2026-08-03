@@ -602,6 +602,42 @@
     max-width: none;
   }
   tr.cl-head { cursor: pointer; }
+
+  /* Checkbox wyboru grupy do eksportu — 16 px to minimum wygodne do kliknięcia */
+  .cl-check {
+    width: 16px; height: 16px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    margin-right: 10px;
+    vertical-align: -3px;
+    flex-shrink: 0;
+  }
+
+  /* Pasek nad listą grup */
+  .cl-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 9px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .cl-select-all {
+    padding: 5px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--accent);
+    font-family: 'Inter', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .cl-select-all:hover { background: rgba(217,119,87,0.08); border-color: var(--accent); }
+  .cl-toolbar-hint { font-size: 0.72rem; color: var(--text-muted); }
   tr.cl-head:hover > td { background: rgba(217,119,87,0.08); }
   .cl-group.selected tr.cl-head > td { background: rgba(217,119,87,0.14); }
   .cl-group.selected tr:not(.cl-head) { background: rgba(217,119,87,0.04); }
@@ -664,26 +700,6 @@
   .cluster-clear-btn:hover { border-color: var(--accent); color: var(--accent); }
 
   /* Przycisk eksportu skupiska */
-  .btn-cluster-export {
-    width: 100%;
-    padding: 10px;
-    background: transparent;
-    color: var(--accent);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font-family: 'Inter', sans-serif;
-    font-size: 0.82rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-  }
-  .btn-cluster-export:hover { background: rgba(217,119,87,0.07); border-color: var(--accent); }
-  .btn-cluster-export.visible { display: flex; }
-
   /* ── SCROLLBAR ── */
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -774,6 +790,9 @@
 
     /* Lista pogrupowana po skupiskach */
     tr.cl-head > td { padding: 8px 12px; }
+    .cl-check { width: 18px; height: 18px; margin-right: 8px; }  /* palec, nie kursor */
+    .cl-toolbar { padding: 8px 12px; gap: 8px; }
+    .cl-toolbar-hint { display: none; }   /* wąsko — sam przełącznik wystarczy */
     .cl-title { font-size: 0.8rem; }
     .cl-meta { font-size: 0.72rem; margin-left: 6px; }
     .cl-area { font-size: 0.68rem; margin-left: 6px; }
@@ -913,19 +932,13 @@
       <div class="legend-note">wielkość koła = zasięg skupiska</div>
     </div>
 
-    <!-- EKSPORT SKUPISKA -->
-    <button class="btn-cluster-export" id="clusterExportBtn" onclick="exportCluster()">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      Eksportuj skupisko do Excel
-    </button>
-
     <div style="display:flex;gap:7px;">
       <button class="btn-primary" id="searchBtn" onclick="startSearch()" style="flex:1;">🔍 Szukaj</button>
       <button class="btn-primary" id="stopBtn" onclick="stopSearch()" style="flex:0 0 48px;background:var(--red);display:none;" title="Zatrzymaj wyszukiwanie">■</button>
     </div>
     <button class="btn-secondary" id="exportBtn" onclick="exportExcel()" disabled>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      Eksportuj do Excel
+      <span id="exportBtnLabel">Eksportuj do Excel</span>
     </button>
 
     <div class="divider"></div>
@@ -1049,6 +1062,9 @@ let clusterInfoWindows = [];      // InfoWindow trzeba zamykać ręcznie — set
 let clusterData = [];             // obliczone skupiska
 let selectedClusterIdx = null;    // indeks klikniętego skupiska
 let clusterDebounceTimer = null;
+// Grupy zaznaczone do eksportu: indeksy skupisk + literał 'outside' dla lokali
+// spoza skupisk. Domyślnie wszystkie — najczęstszy przypadek to eksport całości.
+let selectedGroups = new Set();
 
 // ── WSPÓLNE HELPERY ──
 // Wynik = ocena × log10(opinie+1). Był powielony w 7 miejscach.
@@ -1096,7 +1112,6 @@ function switchView(view) {
   // Zawsze czyść poprzedni stan
   clearClusterOverlays();
   clearMarkers();
-  document.getElementById('clusterExportBtn').classList.remove('visible');
   document.getElementById('clusterInfoBar').classList.remove('visible');
 
   if (view === 'cluster') {
@@ -1111,6 +1126,7 @@ function switchView(view) {
       renderResults(results);
     }
   }
+  refreshExportButton();
 }
 
 // Odświeża tabelę zgodnie z aktywnym widokiem (używane po doczytaniu emaili —
@@ -1270,9 +1286,9 @@ function recomputeClusters() {
   clearClusterOverlays();
   selectedClusterIdx = null;
   document.getElementById('clusterInfoBar').classList.remove('visible');
-  document.getElementById('clusterExportBtn').classList.remove('visible');
 
   clusterData = computeClusters(results, radius, minCount);
+  resetGroupSelection();   // indeksy grup się zmieniły — zaznacz wszystkie od nowa
 
   if (!clusterData.length) {
     document.getElementById('resultsTitle').innerHTML =
@@ -1393,7 +1409,6 @@ function selectCluster(idx, scrollToGroup = true) {
   document.getElementById('clusterInfoText').innerHTML =
     `Skupisko <strong>#${idx + 1}</strong>: <strong>${cl.count} ${plLokal(cl.count)}</strong> w rozpiętości do ${cl.radius * 2}m · śr. ocena <strong>★${cl.avgRating}</strong>`;
 
-  document.getElementById('clusterExportBtn').classList.add('visible');
 
   // Lista jest pogrupowana, więc zamiast filtrować tabelę podświetlamy grupę
   document.querySelectorAll('.cl-group.selected').forEach(g => g.classList.remove('selected'));
@@ -1413,7 +1428,6 @@ function focusCluster(idx) {
 function clearClusterSelection() {
   selectedClusterIdx = null;
   document.getElementById('clusterInfoBar').classList.remove('visible');
-  document.getElementById('clusterExportBtn').classList.remove('visible');
 
   // Zresetuj opacity kółek
   clusterData.forEach((cl, i) => {
@@ -1510,6 +1524,65 @@ function clusterAreaLabel(members) {
 
 const CLUSTER_ROW_CLICK = (p) => `focusOnMap(${Number(p.lat) || 0},${Number(p.lng) || 0})`;
 
+// ── WYBÓR GRUP DO EKSPORTU ──
+// Klucz grupy: indeks skupiska (0,1,2…) albo 'outside' dla lokali spoza skupisk.
+
+// Lokale spoza skupisk, posortowane malejąco po Wyniku (jak na ekranie)
+function outsidePlaces() {
+  const inCluster = new Set();
+  clusterData.forEach(cl => cl.members.forEach(m => inCluster.add(m)));
+  return results.filter(p => !inCluster.has(p)).sort((a, b) => scoreOf(b) - scoreOf(a));
+}
+
+function allGroupKeys() {
+  const keys = clusterData.map((_, i) => i);
+  if (outsidePlaces().length) keys.push('outside');
+  return keys;
+}
+
+// Wywoływane po każdym przeliczeniu skupisk — indeksy grup i tak się zmieniają,
+// więc trzymanie starego zaznaczenia byłoby mylące
+function resetGroupSelection() {
+  selectedGroups = new Set(allGroupKeys());
+}
+
+function toggleGroup(key, checked) {
+  if (checked) selectedGroups.add(key); else selectedGroups.delete(key);
+  refreshExportButton();
+  refreshSelectAllLabel();
+}
+
+function toggleAllGroups() {
+  const keys = allGroupKeys();
+  const wszystkie = keys.length > 0 && keys.every(k => selectedGroups.has(k));
+  selectedGroups = wszystkie ? new Set() : new Set(keys);
+  document.querySelectorAll('.cl-check').forEach(cb => { cb.checked = !wszystkie; });
+  refreshExportButton();
+  refreshSelectAllLabel();
+}
+
+function refreshSelectAllLabel() {
+  const btn = document.getElementById('clSelectAll');
+  if (!btn) return;
+  const keys = allGroupKeys();
+  const wszystkie = keys.length > 0 && keys.every(k => selectedGroups.has(k));
+  btn.textContent = wszystkie ? 'Odznacz wszystkie' : 'Zaznacz wszystkie';
+}
+
+// Zaznaczone grupy w kolejności ekranu: skupiska 1..n, potem lokale spoza skupisk
+function selectedExportGroups() {
+  const out = [];
+  clusterData.forEach((cl, idx) => {
+    if (!selectedGroups.has(idx)) return;
+    out.push({ nr: idx + 1, places: [...cl.members].sort((a, b) => scoreOf(b) - scoreOf(a)) });
+  });
+  if (selectedGroups.has('outside')) {
+    const poza = outsidePlaces();
+    if (poza.length) out.push({ nr: null, places: poza });
+  }
+  return out;
+}
+
 // Widok Skupiska: JEDNA tabela, w niej po jednym <tbody> na skupisko.
 // Wiersze lokali renderuje ten sam tableRowsHtml co widok Lista — jeden wspólny
 // nagłówek kolumn gwarantuje, że kolumny są wyrównane we wszystkich grupach.
@@ -1517,10 +1590,14 @@ function renderClusterGroups() {
   const el = document.getElementById('tableContainer');
   const nCols = tableColumns('compact').length;
 
-  const inCluster = new Set();
-  clusterData.forEach(cl => cl.members.forEach(m => inCluster.add(m)));
-  const outside = results.filter(p => !inCluster.has(p))
-                         .sort((a, b) => scoreOf(b) - scoreOf(a));
+  const outside = outsidePlaces();
+
+  // stopPropagation — nagłówek ma własny handler (centrowanie mapy / zwijanie sekcji),
+  // a kliknięcie w checkbox nie może go wyzwalać
+  const checkbox = (key, checked) =>
+    `<input type="checkbox" class="cl-check" ${checked ? 'checked' : ''}` +
+    ` onclick="event.stopPropagation(); toggleGroup(${typeof key === 'number' ? key : `'${key}'`}, this.checked)"` +
+    ` title="Uwzględnij w eksporcie">`;
 
   // clusterData jest już posortowane malejąco po liczbie lokali (computeClusters)
   const groups = clusterData.map((cl, idx) => {
@@ -1531,6 +1608,7 @@ function renderClusterGroups() {
       <tbody class="cl-group" id="clGroup${idx}">
         <tr class="cl-head" onclick="focusCluster(${idx})" title="Wyśrodkuj mapę na tym skupisku">
           <td colspan="${nCols}">
+            ${checkbox(idx, selectedGroups.has(idx))}
             <span class="cl-dot" style="background:${col};"></span>
             <span class="cl-title">Skupisko ${idx + 1}</span>
             <span class="cl-meta">${cl.count} ${plLokal(cl.count)} · śr. ocena ★${cl.avgRating}</span>
@@ -1545,6 +1623,7 @@ function renderClusterGroups() {
       <tbody class="cl-outside collapsed" id="clOutside">
         <tr class="cl-head" onclick="toggleOutside()">
           <td colspan="${nCols}">
+            ${checkbox('outside', selectedGroups.has('outside'))}
             <span class="cl-caret"></span>
             <span class="cl-title">Lokale poza skupiskami</span>
             <span class="cl-meta">${outside.length}</span>
@@ -1555,24 +1634,66 @@ function renderClusterGroups() {
 
   if (!clusterData.length && !outside.length) {
     el.innerHTML = emptyState('Brak wyników dla podanych kryteriów');
+    refreshExportButton();
     return;
   }
 
   const hint = clusterData.length ? '' :
     `<div class="cl-nohit">Brak skupisk dla podanych parametrów — zwiększ rozpiętość lub zmniejsz min. lokali</div>`;
 
-  el.innerHTML = hint +
+  const toolbar = `
+    <div class="cl-toolbar">
+      <button type="button" class="cl-select-all" id="clSelectAll" onclick="toggleAllGroups()">Odznacz wszystkie</button>
+      <span class="cl-toolbar-hint">zaznaczone grupy trafią do eksportu</span>
+    </div>`;
+
+  el.innerHTML = hint + toolbar +
     `<table class="cl-table"><thead>${tableHeadHtml('compact')}</thead>${groups}${outsideHtml}</table>`;
 
   // Przywróć podświetlenie, jeśli jakieś skupisko było wybrane na mapie
   if (selectedClusterIdx !== null) {
     document.getElementById('clGroup' + selectedClusterIdx)?.classList.add('selected');
   }
+
+  refreshSelectAllLabel();
+  refreshExportButton();
 }
 
 // Sekcja "poza skupiskami" — domyślnie zwinięta
 function toggleOutside() {
   document.getElementById('clOutside')?.classList.toggle('collapsed');
+}
+
+// Etykieta i aktywność przycisku eksportu. W trybie Lista bez zmian,
+// w trybie Skupiska pokazuje, ile grup i lokali obejmie eksport.
+function refreshExportButton() {
+  const btn = document.getElementById('exportBtn');
+  const label = document.getElementById('exportBtnLabel');
+  if (!btn || !label) return;
+
+  if (!results.length) {
+    btn.disabled = true;
+    label.textContent = 'Eksportuj do Excel';
+    return;
+  }
+  if (activeView !== 'cluster') {
+    btn.disabled = false;
+    label.textContent = 'Eksportuj do Excel';
+    return;
+  }
+
+  const grupy = selectedExportGroups();
+  const lokali = grupy.reduce((s, g) => s + g.places.length, 0);
+  const skupisk = grupy.filter(g => g.nr !== null).length;
+
+  btn.disabled = (lokali === 0);
+  if (lokali === 0) {
+    label.textContent = 'Eksportuj do Excel — nic nie zaznaczono';
+  } else if (skupisk === 0) {
+    label.textContent = `Eksportuj do Excel (${lokali} ${plLokal(lokali)})`;
+  } else {
+    label.textContent = `Eksportuj do Excel (${skupisk} ${plSkupisk(skupisk)} · ${lokali} ${plLokal(lokali)})`;
+  }
 }
 
 function focusOnMap(lat, lng) {
@@ -1583,36 +1704,37 @@ function focusOnMap(lat, lng) {
 
 // ══════════════════════════════════════════
 // ── WSPÓLNY BUDOWNICZY ARKUSZA EXCEL ──
-// exportExcel i exportCluster budowały nagłówki, szerokości i wiersze osobno;
-// w exportCluster szerokości kolumn rozjeżdżały się w trybie Firmy (brak kolumny Branża).
+// Jeden budowniczy arkusza dla obu trybów eksportu — listy i zaznaczonych skupisk.
 // ══════════════════════════════════════════
-function buildSheet(list, mode = 'full') {
+// clusterOf — opcjonalna funkcja lokal → numer skupiska. Podana, dokłada kolumnę
+// "Skupisko" na początku arkusza (widok Skupiska); pominięta, daje arkusz jak w
+// trybie Lista.
+function buildSheet(list, { clusterOf = null } = {}) {
   const isCompanyMode = (activeChip === 'company');
-  const full = (mode === 'full');
 
   const headers = [
+    ...(clusterOf ? ['Skupisko'] : []),
     '#', 'Nazwa',
     ...(isCompanyMode ? ['Branża'] : []),
     'Ocena Google', 'Liczba opinii', 'Wynik',
-    ...(full ? ['Kraj', 'Miasto'] : []),
-    'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW',
-    ...(full ? ['Google Maps'] : []),
+    'Kraj', 'Miasto', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW',
+    'Google Maps',
   ];
   const cols = [
+    ...(clusterOf ? [{ wch: 10 }] : []),
     { wch: 5 }, { wch: 35 },
     ...(isCompanyMode ? [{ wch: 22 }] : []),
     { wch: 12 }, { wch: 14 }, { wch: 8 },
-    ...(full ? [{ wch: 12 }, { wch: 16 }] : []),
-    { wch: 20 }, { wch: 28 }, { wch: 18 }, { wch: 25 }, { wch: 32 },
-    ...(full ? [{ wch: 40 }] : []),
+    { wch: 12 }, { wch: 16 }, { wch: 20 }, { wch: 28 }, { wch: 18 }, { wch: 25 }, { wch: 32 },
+    { wch: 40 },
   ];
   const rows = list.map((p, i) => [
+    ...(clusterOf ? [clusterOf(p)] : []),
     i + 1, p.name,
     ...(isCompanyMode ? [p.industry || ''] : []),
     p.rating, p.reviews, parseFloat(scoreOf(p).toFixed(1)),
-    ...(full ? [p.country, p.city] : []),
-    p.district, p.street, p.phone, p.email || '', p.website || '',
-    ...(full ? [p.googleUrl || ''] : []),
+    p.country, p.city, p.district, p.street, p.phone, p.email || '', p.website || '',
+    p.googleUrl || '',
   ]);
 
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
@@ -1623,28 +1745,6 @@ function buildSheet(list, mode = 'full') {
 // Nazwa miasta trafiała wprost do nazwy pliku — usuwamy znaki niedozwolone w systemie plików
 function safeFileName(s) {
   return ((s || '').replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '').toLowerCase()) || 'wyniki';
-}
-
-function exportCluster() {
-  if (selectedClusterIdx === null || !clusterData[selectedClusterIdx]) return;
-  const cl = clusterData[selectedClusterIdx];
-  const city = document.getElementById('cityInput').value;
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildSheet(cl.members, 'compact'), `Skupisko ${selectedClusterIdx + 1}`);
-
-  const wsMeta = XLSX.utils.aoa_to_sheet([
-    ['Skupisko', `#${selectedClusterIdx + 1}`],
-    ['Liczba lokali', cl.count],
-    ['Rozpiętość skupiska', cl.radius * 2 + 'm'],
-    ['Śr. ocena', cl.avgRating],
-    ['Lokalizacja', city],
-    ['Data', new Date().toLocaleDateString('pl-PL')],
-  ]);
-  wsMeta['!cols'] = [{ wch: 28 }, { wch: 40 }];
-  XLSX.utils.book_append_sheet(wb, wsMeta, 'Info');
-
-  XLSX.writeFile(wb, `skupisko_${selectedClusterIdx + 1}_${safeFileName(city)}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 // ── SECURITY: HTML escape ──
@@ -1909,7 +2009,7 @@ async function doSearch(city) {
       }
       updateStats(results);
       renderAnalytics(results);
-      document.getElementById('exportBtn').disabled = false;
+      refreshExportButton();
       document.getElementById('stopBtn').style.display = 'none';
       document.getElementById('debugBar').style.display = 'none';
 
@@ -2580,12 +2680,13 @@ async function scrapeEmails(data, dbg) {
 // ── EXCEL EXPORT ──
 function exportExcel() {
   if (!results.length) return;
+  if (activeView === 'cluster') { exportClusterSelection(); return; }
 
   const city = document.getElementById('cityInput').value;
   const isCompanyMode = (activeChip === 'company');
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildSheet(results, 'full'), isCompanyMode ? 'Firmy' : 'Lokale');
+  XLSX.utils.book_append_sheet(wb, buildSheet(results), isCompanyMode ? 'Firmy' : 'Lokale');
 
   const wsMeta = XLSX.utils.aoa_to_sheet([
     ['Raport wygenerowany przez', 'Gastro Finder'],
@@ -2593,6 +2694,49 @@ function exportExcel() {
     ['Typ wyszukiwania', typeLabel(activeChip)],
     ['Wyszukiwana lokalizacja', city],
     ['Liczba wyników', results.length],
+  ]);
+  wsMeta['!cols'] = [{ wch: 28 }, { wch: 40 }];
+  XLSX.utils.book_append_sheet(wb, wsMeta, 'Informacje');
+
+  XLSX.writeFile(wb, `gastro_finder_${safeFileName(city)}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+// Eksport zaznaczonych grup w trybie Skupiska. Wiersze pogrupowane po skupiskach
+// w kolejności ekranu, wewnątrz grupy malejąco po Wyniku; kolumna "Skupisko"
+// niesie numer zgodny z numeracją na mapie, a lokale spoza skupisk mają "—".
+function exportClusterSelection() {
+  const grupy = selectedExportGroups();
+  if (!grupy.length) return;
+
+  const city = document.getElementById('cityInput').value;
+  const isCompanyMode = (activeChip === 'company');
+  const spread = parseInt(document.getElementById('clusterSpread').value);
+
+  const lista = [];
+  const numerGrupy = new Map();
+  for (const g of grupy) {
+    for (const p of g.places) {
+      lista.push(p);
+      numerGrupy.set(p, g.nr === null ? '—' : g.nr);
+    }
+  }
+  const skupisk = grupy.filter(g => g.nr !== null).length;
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    wb,
+    buildSheet(lista, { clusterOf: (p) => numerGrupy.get(p) ?? '—' }),
+    isCompanyMode ? 'Firmy' : 'Lokale'
+  );
+
+  const wsMeta = XLSX.utils.aoa_to_sheet([
+    ['Raport wygenerowany przez', 'Gastro Finder'],
+    ['Data', new Date().toLocaleDateString('pl-PL')],
+    ['Typ wyszukiwania', typeLabel(activeChip)],
+    ['Wyszukiwana lokalizacja', city],
+    ['Liczba wyników', lista.length],
+    ['Wyeksportowanych skupisk', skupisk],
+    ['Rozpiętość skupiska', spread + ' m'],
   ]);
   wsMeta['!cols'] = [{ wch: 28 }, { wch: 40 }];
   XLSX.utils.book_append_sheet(wb, wsMeta, 'Informacje');
