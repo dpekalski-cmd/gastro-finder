@@ -478,9 +478,10 @@
     color: var(--text-muted);
     margin-top: 2px;
   }
+  /* 2 wykresy → 2 kolumny, bez pustego miejsca po siatce 3-kolumnowej */
   .chart-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 12px;
   }
   .chart-box {
@@ -970,19 +971,11 @@
         <div class="analytics-grid" id="analyticsGrid">
           <!-- Row 1: Summary cards -->
           <div class="analytics-cards" id="summaryCards"></div>
-          <!-- Charts: 3 per row, square proportions -->
+          <!-- Charts: 2 per row, square proportions -->
           <div class="chart-grid">
             <div class="chart-box">
               <div class="chart-label">Rozkład ocen</div>
               <canvas id="chartRatings"></canvas>
-            </div>
-            <div class="chart-box">
-              <div class="chart-label">Top 5 vs pozostałe</div>
-              <canvas id="chartTopVsRest"></canvas>
-            </div>
-            <div class="chart-box">
-              <div class="chart-label">Rozkład Wyniku</div>
-              <canvas id="chartScores"></canvas>
             </div>
             <div class="chart-box">
               <div class="chart-label">Pokrycie dzielnic</div>
@@ -2464,91 +2457,7 @@ function renderAnalytics(data) {
     }
   }));
 
-  // ── Chart 2: Top 5 vs reszta ──
-  const top5 = data.slice(0, 5);
-  const rest = data.slice(5);
-  const top5Avg = top5.length ? (top5.reduce((s,p) => s+p.rating, 0) / top5.length).toFixed(2) : 0;
-  const restAvg = rest.length ? (rest.reduce((s,p) => s+p.rating, 0) / rest.length).toFixed(2) : 0;
-  const top5Rev = top5.length ? Math.round(top5.reduce((s,p) => s+p.reviews, 0) / top5.length) : 0;
-  const restRev = rest.length ? Math.round(rest.reduce((s,p) => s+p.reviews, 0) / rest.length) : 0;
-
-  chartInstances.push(new Chart(document.getElementById('chartTopVsRest'), {
-    type: 'bar',
-    data: {
-      labels: ['Śr. ocena', 'Śr. opinii (÷100)'],
-      datasets: [
-        {
-          label: 'Top 5',
-          data: [top5Avg, (top5Rev / 100).toFixed(1)],
-          backgroundColor: accent,
-          borderRadius: 4,
-        },
-        {
-          label: 'Pozostałe',
-          data: [restAvg, (restRev / 100).toFixed(1)],
-          backgroundColor: 'rgba(217,119,87,0.25)',
-          borderRadius: 4,
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } },
-      scales: {
-        y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } },
-        x: { grid: { display: false } }
-      }
-    }
-  }));
-
-  // ── Chart 3: Rozkład wyników (scatter) ──
-  const scatterData = data.map(p => ({
-    x: p.reviews,
-    y: p.rating,
-    label: p.name,
-  }));
-
-  // Średnia liczona RAZ. Wcześniej reduce po całym zbiorze siedział w środku map()
-  // — O(n²) — a przy minReviews=0 dzielenie przez zero dawało NaN i wykres znikał.
-  const meanReviews = (totalReviews / data.length) || 1;
-
-  chartInstances.push(new Chart(document.getElementById('chartScores'), {
-    type: 'bubble',
-    data: {
-      datasets: [{
-        data: scatterData.map(d => ({
-          x: d.x,
-          y: d.y,
-          r: Math.max(4, Math.min(18, (d.x / meanReviews) * 8)) || 4,
-        })),
-        backgroundColor: 'rgba(217,119,87,0.35)',
-        borderColor: accent,
-        borderWidth: 1,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const d = scatterData[ctx.dataIndex];
-              return `${d.label}: ★${d.y} · ${d.x} opinii`;
-            }
-          }
-        }
-      },
-      scales: {
-        x: { title: { display: true, text: 'Liczba opinii', font: { size: 10 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
-        y: { title: { display: true, text: 'Ocena', font: { size: 10 } }, min: 3.0, max: 5.1, grid: { color: 'rgba(0,0,0,0.05)' } }
-      }
-    }
-  }));
-
-  // ── Chart 4: Pokrycie dzielnic ──
+  // ── Chart 2: Pokrycie dzielnic ──
   const districtCounts = {};
   data.forEach(p => {
     const d = p.district || '(brak danych)';
