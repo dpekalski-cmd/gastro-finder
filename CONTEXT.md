@@ -24,22 +24,36 @@ Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin)
 
 ### Widoki (przełącznik „Tryb widoku": Lista / Skupiska)
 - **Lista** — klasyczne markery numerowane + tabela z rankingiem
-- **Skupiska** — klasteryzacja geograficzna:
-  - Algorytm zachłanny: dla każdego punktu liczymy sąsiadów w promieniu R (haversine), bierzemy punkt o największej gęstości, tworzymy skupisko, usuwamy członków z puli, powtarzamy
-  - Parametry: promień 30–500 m (domyślnie 100), min. lokali w skupisku 2–12 (domyślnie 3) — zmiana slidera przelicza na żywo (`recomputeClusters`)
-  - Na mapie: koła Circle kolorowane wg wielkości (7+ czerwone, 5–6 pomarańczowe, 4 żółte, 2–3 zielone) + InfoWindow z licznikiem i śr. oceną; lokale poza skupiskami jako szare kropki
-  - Legenda skupisk w sidebarze
-  - Klik w skupisko → pan/zoom, pasek info nad tabelą, filtrowanie tabeli do członków skupiska, przycisk „Eksportuj skupisko do Excel" (osobny arkusz + zakładka Info z metadanymi)
-  - Tabela w trybie skupisk ma badge `S1`, `S2`… przy lokalach przypisanych do skupisk
+- **Skupiska** — klasteryzacja geograficzna + lista pogrupowana pod mapą
+
+  **Algorytm** (`computeClusters`) — zachłanny, liczony na siatce przestrzennej:
+  - sąsiedztwa liczone raz przez siatkę o komórce = promień (każdy sąsiad leży w oknie 3×3), potem w pętli bierzemy punkt o największej liczbie żywych sąsiadów, tworzymy z nich skupisko, usuwamy z puli i aktualizujemy liczniki tylko tych punktów, których to dotyczy
+  - skupiska sortowane malejąco po liczbie lokali
+  - to nie jest DBSCAN — nie ma pojęcia punktu granicznego ani rdzeniowego, każdy lokal trafia do co najwyżej jednego skupiska
+
+  **Parametry** (sidebar, przeliczane na żywo z debounce 130 ms):
+  - promień skupiska: 50–1500 m, krok 25, **domyślnie 400 m**. Wcześniej domyślne 100 m przy typowym wyszukiwaniu (20 lokali w dzielnicy) dawało zero skupisk i pierwsze wejście w ten widok wyglądało jak awaria
+  - min. lokali w skupisku: 2–12, domyślnie 3
+
+  **Na mapie**: koła `Circle` kolorowane wg wielkości przez `clusterColor()` (7+ czerwone, 5–6 pomarańczowe, 4 żółte, 2–3 zielone) + InfoWindow z licznikiem i śr. oceną; lokale poza skupiskami jako szare kropki. Legenda w sidebarze używa tych samych progów i kolorów.
+
+  **Lista pod mapą** (`renderClusterGroups`) — pogrupowana po skupiskach, nie płaska:
+  - jedna wspólna `<table>`, w niej po jednym `<tbody>` na skupisko. Osobne tabele per grupa rozjeżdżałyby szerokości kolumn (auto-layout dobiera je niezależnie dla każdej tabeli)
+  - nagłówek grupy: kropka w kolorze z `clusterColor()` (ten sam co koło na mapie), numer, liczba lokali, śr. ocena i — jeśli wyraźnie dominuje — nazwa ulicy (`clusterAreaLabel`: pokazywana tylko gdy ≥2 lokale i ≥40% członków, żeby nie zmyślać etykiety)
+  - kolumny bez Kraju/Miasta/Dzielnicy — w obrębie skupiska identyczne dla wszystkich lokali
+  - lokale wewnątrz skupiska sortowane malejąco po Wyniku
+  - lokale poza skupiskami w sekcji na końcu, domyślnie zwiniętej, z licznikiem
+  - klik w nagłówek grupy → wyśrodkowanie mapy na skupisku; klik w wiersz → focus lokalu
+  - klik w skupisko na mapie → podświetlenie grupy na liście (nie filtrowanie), pasek info i przycisk „Eksportuj skupisko do Excel" (osobny arkusz + zakładka Info z metadanymi)
+
+  Renderer wierszy jest wspólny z widokiem Lista — `buildTableHtml` rozbite na `tableColumns` / `tableHeadHtml` / `tableRowsHtml`, tryb `full` dla Listy i `compact` dla grup.
 
 ### Analityka (Chart.js)
 - 4 karty summary: liczba lokali, śr. ocena, łącznie opinii, śr. Wynik
-- 4 wykresy w siatce 3-w-linii, kwadratowe proporcje:
+- 2 wykresy w siatce 2-w-linii, kwadratowe proporcje (na mobile 1 kolumna, 4:3):
   1. Rozkład ocen (histogram, 6 koszyków)
-  2. Top 5 vs pozostałe (śr. ocena i śr. opinii ÷100)
-  3. Rozkład Wyniku (bubble chart: opinie × ocena, rozmiar = względna liczba opinii)
-  4. Pokrycie dzielnic (doughnut ≤8 dzielnic, poziomy bar powyżej)
-- Kolumna „Wynik" = `rating × log10(reviews+1)` — po tym sortowany ranking
+  2. Pokrycie dzielnic (doughnut ≤8 dzielnic, poziomy bar powyżej)
+- Kolumna „Wynik" = `rating × log10(reviews+1)` (`scoreOf`) — po tym sortowany ranking, ta sama funkcja zasila tabelę, sortowanie i eksport Excel
 
 ### Pozostałe
 - Email scraping (warunkowy, checkbox „Szukaj adresów e-mail") — PHP backend przeszukuje stronę główną → podstrony /kontakt (max 3, wykrywane z linków lub zgadywane) → guessEmails przez DNS MX + weryfikacja SMTP RCPT TO
@@ -89,6 +103,9 @@ Wersja v4 miała lukę SSRF: `max_redirects => 5` w stream wrapperze oznaczało,
 - Facebook email scraping: próba /about, potem guessEmails przez MX/SMTP
 - Klasteryzacja własna (zachłanna, haversine) zamiast MarkerClusterer — potrzebne były realne promienie w metrach i eksport członków skupiska
 - **Heatmapa — usunięta.** Google wycofał `visualization.HeatmapLayer` w Maps JS 3.65 (maj 2026); własna implementacja canvasowa nie dawała zadowalającej jakości. Wzór `ocena × log10(opinie+1)` pozostaje — zasila kolumnę „Wynik”, sortowanie i eksport
+- Widok Skupiska pokazuje listę **pogrupowaną**, nie płaską — wcześniej pod mapą ze skupiskami stała ta sama tabela co w trybie Lista i nie było widać przypisania lokali do skupisk
+- Domyślny promień skupiska 400 m (nie 100 m) — dobrany tak, żeby typowe wyszukiwanie od razu dawało niepuste skupiska
+- Z dashboardu usunięte „Top 5 vs pozostałe" i „Rozkład Wyniku" (bubble) — zostawiono dwa wykresy, które faktycznie były czytane
 - Klasteryzacja liczona na siatce przestrzennej (komórka = promień, sąsiedzi w oknie 3×3), z punktowym odświeżaniem liczników po wycięciu skupiska — semantyka zachłanna identyczna jak w wersji naiwnej, ale bez O(n³). Zweryfikowane: te same skupiska, 100–600× szybciej (500 lokali: 5,1 s → 8 ms)
 - Żądania do Places API idą równolegle z limitem współbieżności (4 dla nearbySearch, 6 dla getDetails) + retry na `OVER_QUERY_LIMIT`; sekwencyjne pobieranie było wąskim gardłem całej aplikacji
 
