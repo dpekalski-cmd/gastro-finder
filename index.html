@@ -985,7 +985,7 @@ let clusterCircles = [];          // same koła, indeksowane równolegle do clus
 let clusterInfoWindows = [];      // InfoWindow trzeba zamykać ręcznie — setMap(null) ich nie usuwa
 let clusterData = [];             // obliczone skupiska
 let selectedClusterIdx = null;    // indeks klikniętego skupiska
-let heatmapLayer = null;          // google.maps.visualization.HeatmapLayer
+let heatmapLayer = null;          // własny HeatmapOverlay (OverlayView) — patrz niżej
 let clusterDebounceTimer = null;
 
 // ── WSPÓLNE HELPERY ──
@@ -1072,40 +1072,220 @@ function refreshCurrentView() {
   }
 }
 
-// ── HEATMAPA ──
+// ══════════════════════════════════════════
+// ── HEATMAPA (własna implementacja na canvasie) ──
+// google.maps.visualization.HeatmapLayer został usunięty z Maps JavaScript API
+// w wersji 3.65 (maj 2026). Google odsyła do deck.gl, ale to kilkaset kB
+// zależności dla jednego widoku — rysujemy więc sami.
+//
+// Algorytm (klasyczny, ten sam co w heatmap.js):
+//  1. dla każdego punktu rysujemy czarny radialny gradient z globalAlpha = waga;
+//     nakładające się punkty sumują alfę → kanał alfy staje się mapą gęstości
+//  2. odczytujemy piksele i podmieniamy kolor: wartość alfy (0–255) jest indeksem
+//     w 256-elementowej palecie zielony→żółty→czerwony
+// ══════════════════════════════════════════
+
+const HEAT_RADIUS = 35;      // px — tyle samo co dawne radius: 35
+const HEAT_OPACITY = 0.75;   // tyle samo co dawne opacity: 0.75
+const HEAT_GRADIENT = [
+  [0.00, 'rgba(0,0,0,0)'],
+  [0.20, 'rgba(58,158,110,0.6)'],
+  [0.40, 'rgba(217,200,87,0.75)'],
+  [0.60, 'rgba(217,150,87,0.85)'],
+  [0.80, 'rgba(217,87,87,0.9)'],
+  [1.00, 'rgba(180,30,30,1)'],
+];
+
+// Paleta 256 kolorów — liczona raz, potem tylko odczyt tablicy
+let heatPaletteCache = null;
+function heatPalette() {
+  if (heatPaletteCache) return heatPaletteCache;
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 1;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, 256, 0);
+  HEAT_GRADIENT.forEach(([stop, color]) => g.addColorStop(stop, color));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 1);
+  heatPaletteCache = ctx.getImageData(0, 0, 256, 1).data;
+  return heatPaletteCache;
+}
+
+// Gotowy "stempel" punktu — rysowany raz i powielany przez drawImage.
+// Tworzenie gradientu osobno dla każdego punktu w każdej klatce byłoby wolne.
+let heatStampCache = null;
+function heatStamp() {
+  if (heatStampCache) return heatStampCache;
+  const r = HEAT_RADIUS;
+  const c = document.createElement('canvas');
+  c.width = c.height = r * 2;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(r, r, 0, r, r, r);
+  g.addColorStop(0, 'rgba(0,0,0,1)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, r * 2, r * 2);
+  heatStampCache = c;
+  return heatStampCache;
+}
+
+// Klasa musi powstać dopiero po załadowaniu Maps API — w momencie parsowania
+// skryptu google.maps.OverlayView jeszcze nie istnieje, więc `extends` by wybuchło.
+let HeatmapOverlayClass = null;
+function heatmapOverlayClass() {
+  if (HeatmapOverlayClass) return HeatmapOverlayClass;
+
+  HeatmapOverlayClass = class extends google.maps.OverlayView {
+    constructor(points, opts = {}) {
+      super();
+      this.points = points;                          // [{ latLng, weight }]
+      this.opacity = opts.opacity ?? HEAT_OPACITY;
+      this.canvas = null;
+      this.drawn = null;                             // ostatnio narysowany prostokąt
+    }
+
+    onAdd() {
+      const canvas = document.createElement('canvas');
+      canvas.style.position = 'absolute';
+      canvas.style.pointerEvents = 'none';           // nie przechwytuj kliknięć mapy
+      this.canvas = canvas;
+      // overlayLayer przesuwa się razem z mapą i leży pod markerami
+      this.getPanes().overlayLayer.appendChild(canvas);
+    }
+
+    onRemove() {
+      if (this.canvas?.parentNode) this.canvas.parentNode.removeChild(this.canvas);
+      this.canvas = null;
+      this.drawn = null;
+    }
+
+    draw() {
+      const proj = this.getProjection();
+      const map = this.getMap();
+      if (!proj || !map || !this.canvas) return;
+      const bounds = map.getBounds();
+      if (!bounds) return;
+
+      const sw = proj.fromLatLngToDivPixel(bounds.getSouthWest());
+      const ne = proj.fromLatLngToDivPixel(bounds.getNorthEast());
+      if (!sw || !ne) return;
+
+      const vLeft = Math.min(sw.x, ne.x);
+      const vTop = Math.min(sw.y, ne.y);
+      const vRight = Math.max(sw.x, ne.x);
+      const vBottom = Math.max(sw.y, ne.y);
+      const zoom = map.getZoom();
+
+      // draw() leci przy każdym przesunięciu mapy. Canvas siedzi w panelu, który
+      // przesuwa się razem z mapą, więc dopóki widok mieści się w tym, co już
+      // narysowaliśmy (z zapasem), nie ma czego przeliczać.
+      const d = this.drawn;
+      if (d && d.zoom === zoom &&
+          vLeft >= d.left && vTop >= d.top && vRight <= d.right && vBottom <= d.bottom) {
+        return;
+      }
+
+      const margin = 160;   // zapas, żeby drobne przesunięcia nie wymuszały przerysowania
+      const left = Math.floor(vLeft - margin);
+      const top = Math.floor(vTop - margin);
+      const width = Math.ceil(vRight - vLeft + margin * 2);
+      const height = Math.ceil(vBottom - vTop + margin * 2);
+      // Zabezpieczenie przed absurdalnym canvasem przy dziwnym stanie mapy
+      if (width < 1 || height < 1 || width > 4000 || height > 4000) return;
+
+      const canvas = this.canvas;
+      canvas.style.left = left + 'px';
+      canvas.style.top = top + 'px';
+      canvas.style.width = width + 'px';
+      canvas.style.height = height + 'px';
+      // Bufor w pikselach CSS, nie devicePixelRatio — na ekranach Retina to 4×
+      // mniej pikseli do przetworzenia, a heatmapa i tak jest rozmyta
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.clearRect(0, 0, width, height);
+
+      // ── 1. akumulacja alfy ──
+      const stamp = heatStamp();
+      const r = HEAT_RADIUS;
+      let painted = 0;
+      // Obszar faktycznie zamalowany — kolorujemy tylko jego, nie cały canvas.
+      // Przy skupiskach zajmujących część kadru to duża oszczędność.
+      let bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
+      for (const p of this.points) {
+        const px = proj.fromLatLngToDivPixel(p.latLng);
+        if (!px) continue;
+        const x = px.x - left;
+        const y = px.y - top;
+        if (x < -r || y < -r || x > width + r || y > height + r) continue;   // poza kadrem
+        ctx.globalAlpha = p.weight;
+        ctx.drawImage(stamp, x - r, y - r);
+        if (x - r < bMinX) bMinX = x - r;
+        if (y - r < bMinY) bMinY = y - r;
+        if (x + r > bMaxX) bMaxX = x + r;
+        if (y + r > bMaxY) bMaxY = y + r;
+        painted++;
+      }
+      ctx.globalAlpha = 1;
+      this.drawn = { left, top, right: left + width, bottom: top + height, zoom };
+      if (!painted) return;
+
+      // ── 2. kolorowanie przez paletę ──
+      const bx = Math.max(0, Math.floor(bMinX));
+      const by = Math.max(0, Math.floor(bMinY));
+      const bw = Math.min(width, Math.ceil(bMaxX)) - bx;
+      const bh = Math.min(height, Math.ceil(bMaxY)) - by;
+      if (bw < 1 || bh < 1) return;
+
+      const img = ctx.getImageData(bx, by, bw, bh);
+      const data = img.data;
+      const pal = heatPalette();
+      const op = this.opacity;
+      for (let i = 3; i < data.length; i += 4) {
+        const a = data[i];
+        if (a === 0) continue;          // przezroczyste piksele zostawiamy w spokoju
+        const o = a << 2;               // indeks w palecie = wartość alfy
+        data[i - 3] = pal[o];
+        data[i - 2] = pal[o + 1];
+        data[i - 1] = pal[o + 2];
+        data[i]     = pal[o + 3] * op;
+      }
+      ctx.putImageData(img, bx, by);
+    }
+  };
+
+  return HeatmapOverlayClass;
+}
+
 function clearHeatmap() {
   if (heatmapLayer) {
-    heatmapLayer.setMap(null);
+    heatmapLayer.setMap(null);   // OverlayView.setMap(null) wywoła onRemove()
     heatmapLayer = null;
   }
 }
 
 function showHeatmap(places) {
-  if (!map || !window.google?.maps?.visualization) return;
+  if (!map || !window.google?.maps?.OverlayView) return;
   clearHeatmap();   // bez tego kolejne wyszukiwanie nakładało warstwy jedna na drugą
 
-  const weightedPoints = places
+  const pts = places
     .filter(p => p.lat && p.lng)
     .map(p => ({
-      location: new google.maps.LatLng(p.lat, p.lng),
-      weight: Math.max(0.2, ((p.rating || 0) - 3) / 2 * Math.log10((p.reviews || 0) + 1)),
+      latLng: new google.maps.LatLng(p.lat, p.lng),
+      // waga jak dotychczas: ocena znormalizowana do 0–1 × log10(opinie+1)
+      raw: Math.max(0.2, ((p.rating || 0) - 3) / 2 * Math.log10((p.reviews || 0) + 1)),
     }));
-  if (!weightedPoints.length) return;
+  if (!pts.length) return;
 
-  heatmapLayer = new google.maps.visualization.HeatmapLayer({
-    data: weightedPoints,
-    map,
-    radius: 35,
-    opacity: 0.75,
-    gradient: [
-      'rgba(0,0,0,0)',
-      'rgba(58,158,110,0.6)',
-      'rgba(217,200,87,0.75)',
-      'rgba(217,150,87,0.85)',
-      'rgba(217,87,87,0.9)',
-      'rgba(180,30,30,1)',
-    ],
-  });
+  // Normalizacja do 0–1 względem najmocniejszego punktu. Bez tego przy małym
+  // zbiorze wyników heatmapa byłaby ledwo widoczna, a przy dużym — cała czerwona.
+  const maxW = pts.reduce((m, p) => Math.max(m, p.raw), 0) || 1;
+  pts.forEach(p => { p.weight = Math.max(0.08, p.raw / maxW); });
+
+  const Overlay = heatmapOverlayClass();
+  heatmapLayer = new Overlay(pts, { opacity: HEAT_OPACITY });
+  heatmapLayer.setMap(map);
 
   // Dopasuj zoom do danych
   if (places.length > 0) {
@@ -1562,7 +1742,8 @@ function initWithKey() {
 
 function loadGoogleMaps() {
   const script = document.createElement('script');
-  script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,visualization&callback=onMapsReady`;
+  // visualization usunięte — HeatmapLayer zniknął z API 3.65, mamy własną heatmapę
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=onMapsReady`;
   script.async = true;
   script.onerror = () => alert('Nie można załadować Google Maps. Sprawdź klucz API i upewnij się, że masz włączone Maps JavaScript API + Places API.');
   document.head.appendChild(script);
