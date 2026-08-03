@@ -717,8 +717,9 @@
 <div id="apiOverlay">
   <div class="api-box">
     <h2>Gastro Finder</h2>
-    <p>Do wyszukiwania potrzebny jest klucz <strong>Google Places API</strong>.<br>
-    Utwórz go w <a href="https://console.cloud.google.com/" target="_blank">Google Cloud Console</a> — włącz <em>Maps JavaScript API</em> oraz <em>Places API</em>.</p>
+    <p>Do wyszukiwania potrzebny jest klucz <strong>Google Maps API</strong>.<br>
+    Utwórz go w <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">Google Cloud Console</a> i włącz <strong>wszystkie trzy</strong> API:<br>
+    <em>Maps JavaScript API</em> · <em>Places API</em> · <em>Geocoding API</em></p>
     <input type="password" id="apiKeyInput" placeholder="Wklej klucz API: AIza..." autocomplete="off"/>
     <button class="btn-primary" onclick="initWithKey()">Uruchom aplikację</button>
     <p class="api-note">Klucz jest używany tylko lokalnie w tej przeglądarce i nigdzie nie jest przesyłany poza Google.</p>
@@ -1677,8 +1678,23 @@ async function doSearch(city) {
   geocoder.geocode({ address: city }, async (geoResults, geoStatus) => {
     dbg('KROK 5: Geocoder status=' + geoStatus);
     if (geoStatus !== 'OK' || !geoResults[0]) {
-      dbg('BŁĄD: Nie znaleziono lokalizacji: ' + city);
-      document.getElementById('searchBtn').disabled = false; return;
+      // Komunikat MUSI zawierać status — bez niego nie da się odróżnić literówki
+      // w nazwie miasta od niewłączonego API czy przekroczonego limitu
+      const hints = {
+        REQUEST_DENIED:   'Geocoding API nie jest włączone w Google Cloud Console (to OSOBNE API od Maps i Places) albo klucz ma restrykcje domenowe.',
+        ZERO_RESULTS:     'Google nie zna takiej lokalizacji — sprawdź pisownię.',
+        OVER_QUERY_LIMIT: 'Przekroczony limit zapytań lub brak włączonego rozliczania (billing) w Google Cloud.',
+        INVALID_REQUEST:  'Puste lub nieprawidłowe zapytanie.',
+        UNKNOWN_ERROR:    'Chwilowy błąd po stronie Google — spróbuj ponownie.',
+        ERROR:            'Błąd sieci — sprawdź połączenie.',
+      };
+      const hint = hints[geoStatus] || 'Nieznany status.';
+      dbg(`BŁĄD geokodera [${geoStatus}] dla "${city}" — ${hint}`);
+      console.error('[GastroFinder] Geocoder status:', geoStatus, '| miasto:', city);
+      alert(`Nie udało się ustalić lokalizacji "${city}".\n\nStatus Google: ${geoStatus}\n\n${hint}`);
+      document.getElementById('searchBtn').disabled = false;
+      document.getElementById('stopBtn').style.display = 'none';   // zostawał widoczny
+      return;
     }
     const location = geoResults[0].geometry.location;
     const geoBounds = geoResults[0].geometry.viewport || geoResults[0].geometry.bounds || null;
