@@ -1111,6 +1111,10 @@ function refreshCurrentView() {
   }
 }
 
+// Dolny limit promienia rysowanego koła — bardzo ciasne skupisko (np. dwa lokale
+// w tym samym budynku) miałoby promień rzędu metrów i byłoby niewidoczne na mapie.
+const MIN_DRAW_RADIUS = 30;
+
 // ── ALGORYTM KLASTERYZACJI (grid-based) ──
 // UWAGA: radiusMeters to zasięg od punktu ZACZEPIENIA, nie średnica ani nie
 // rozpiętość grupy. Grupa rozciąga się na dwa takie zasięgi, więc dwa skrajne
@@ -1193,15 +1197,23 @@ function computeClusters(places, radiusMeters, minCount) {
 
     if (members.length >= minCount) {
       const mem = members.map(j => pts[j]);
+      const cLat = mem.reduce((s, p) => s + p.lat, 0) / mem.length;
+      const cLng = mem.reduce((s, p) => s + p.lng, 0) / mem.length;
+
+      // Promień do NAJDALSZEGO członka. Członkowie byli wybierani wokół punktu
+      // zaczepienia, a koło rysujemy wokół centroidu — przy stałym promieniu
+      // część lokali wypadała poza kołem, co przeczyło jego komunikatowi
+      // („tyle obejdziesz z jednego postoju").
+      let fit = 0;
+      for (const p of mem) fit = Math.max(fit, haversineMeters(cLat, cLng, p.lat, p.lng));
+
       clusters.push({
-        center: {
-          lat: mem.reduce((s, p) => s + p.lat, 0) / mem.length,
-          lng: mem.reduce((s, p) => s + p.lng, 0) / mem.length,
-        },
+        center: { lat: cLat, lng: cLng },
         members: mem,
         count: mem.length,
         avgRating: (mem.reduce((s, p) => s + (p.rating || 0), 0) / mem.length).toFixed(1),
-        radius: radiusMeters,
+        radius: radiusMeters,                 // parametr algorytmu (rozpiętość / 2)
+        drawRadius: Math.max(MIN_DRAW_RADIUS, fit),   // promień koła na mapie
       });
     }
   }
@@ -1265,7 +1277,7 @@ function recomputeClusters() {
     const circle = new google.maps.Circle({
       map,
       center: cl.center,
-      radius: cl.radius,
+      radius: cl.drawRadius,
       fillColor: colors.fillColor,
       fillOpacity: colors.fillOpacity,
       strokeColor: colors.strokeColor,

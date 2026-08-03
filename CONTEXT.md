@@ -42,7 +42,7 @@ Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin)
   **Skąd 175 m** — kryterium: skupisko obchodzalne w 2–3 minuty pieszo.
   `3 min × 80 m/min = 240 m marszu ÷ 1,3 (obejście ulicami) ≈ 185 m` w linii prostej jako dopuszczalna rozpiętość; najbliższa niższa wartość na kroku 25 to **175 m** (= 2,77 min w najgorszym przypadku, 1,16 min dla typowego skupiska).
 
-  🐛 Znany drobiazg: koło rysowane na mapie ma środek w **centroidzie** członków, a członkowie byli wybrani wokół **punktu zaczepienia** — przy ~3% skupisk jeden lokal wypada poza narysowanym kołem. Kosmetyka, nie wpływa na przynależność ani na rozpiętość.
+  **Promień rysowanego koła** ≠ parametr algorytmu. Koło ma środek w centroidzie członków, a promień **dociągnięty do najdalszego członka** (`drawRadius`), z dolnym limitem `MIN_DRAW_RADIUS` = 30 m, żeby bardzo ciasne skupiska nie znikały z mapy. Wcześniej koło miało stały promień = zasięg od punktu zaczepienia i przy ~3% skupisk jeden lokal wypadał poza kołem — co przeczyło komunikatowi koła („tyle obejdziesz z jednego postoju"). Efekt uboczny: koła są teraz przeciętnie **mniejsze** (mediana 36 m wobec stałych 87,5 m), więc nakładanie się sąsiednich kół spadło z 4,9% par do 0,2%. Rozmiar koła niesie teraz informację o realnym zasięgu skupiska — legenda tego nie opisuje, bo mapuje wyłącznie kolor na liczbę lokali.
 
   **Na mapie**: koła `Circle` kolorowane wg wielkości przez `clusterColor()` (7+ czerwone, 5–6 pomarańczowe, 4 żółte, 2–3 zielone) + InfoWindow z licznikiem i śr. oceną; lokale poza skupiskami jako szare kropki. Legenda w sidebarze używa tych samych progów i kolorów.
 
