@@ -53,7 +53,9 @@ Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin)
   - lokale wewnątrz skupiska sortowane malejąco po Wyniku
   - lokale poza skupiskami w sekcji na końcu, domyślnie zwiniętej, z licznikiem
   - klik w nagłówek grupy → wyśrodkowanie mapy na skupisku; klik w wiersz → focus lokalu
-  - klik w skupisko na mapie → podświetlenie grupy na liście (nie filtrowanie), pasek info i przycisk „Eksportuj skupisko do Excel" (osobny arkusz + zakładka Info z metadanymi)
+  - klik w skupisko na mapie → podświetlenie grupy na liście (nie filtrowanie) + pasek info
+  - **checkbox przy każdej grupie** (także przy „Lokale poza skupiskami") wybiera ją do eksportu; nad listą przełącznik „Zaznacz wszystkie / Odznacz wszystkie". Domyślnie zaznaczone wszystkie — najczęstszy przypadek to eksport całości, użytkownik odznacza to, czego nie chce. Każde przeliczenie skupisk (nowe wyszukiwanie, zmiana suwaka) resetuje wybór do „wszystkie", bo indeksy grup i tak się zmieniają
+  - checkboxy wołają `event.stopPropagation()` — nagłówek ma własny handler (centrowanie mapy / zwijanie sekcji „poza")
 
   Renderer wierszy jest wspólny z widokiem Lista — `buildTableHtml` rozbite na `tableColumns` / `tableHeadHtml` / `tableRowsHtml`, tryb `full` dla Listy i `compact` dla grup.
 
@@ -66,7 +68,10 @@ Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin)
 
 ### Pozostałe
 - Email scraping (warunkowy, checkbox „Szukaj adresów e-mail") — PHP backend przeszukuje stronę główną → podstrony /kontakt (max 3, wykrywane z linków lub zgadywane) → guessEmails przez DNS MX + weryfikacja SMTP RCPT TO
-- Eksport Excel (SheetJS) — arkusz danych + arkusz „Informacje"; kolumna Branża w trybie Firmy
+- Eksport Excel (SheetJS) — arkusz danych + arkusz „Informacje"; kolumna Branża w trybie Firmy. Jeden przycisk obsługuje oba tryby (`exportExcel` rozgałęzia się po `activeView`):
+  - **Lista** — wszystkie wyniki, płasko, bez zmian
+  - **Skupiska** — tylko zaznaczone grupy, z dodatkową kolumną „Skupisko" na początku (numer zgodny z mapą, `—` dla lokali spoza skupisk). Wiersze pogrupowane po skupiskach w kolejności ekranu, wewnątrz grupy malejąco po Wyniku. Arkusz „Informacje" dostaje dodatkowo liczbę wyeksportowanych skupisk i użytą rozpiętość. Przycisk pokazuje stan wyboru („Eksportuj do Excel (3 skupiska · 17 lokali)") i jest nieaktywny, gdy nic nie zaznaczono. Nazwa pliku jak dla całości — numery skupisk do niej nie trafiają
+  - Numeracja `#` w arkuszu jest ciągła (1..N), nie restartuje się w każdej grupie jak na ekranie — w arkuszu grupowanie niesie kolumna „Skupisko"
 - Klucz API wpisywany przez użytkownika (overlay na starcie), ładowany z `libraries=places`
 - Zabezpieczenia: XSS (`esc()` — jedna implementacja escapująca `& < > " '`), walidacja `https?://` przy linkach, walidacja formatu klucza API, walidacja emaili z backendu, sanityzacja nazwy pliku eksportu
 
@@ -113,6 +118,7 @@ Wersja v4 miała lukę SSRF: `max_redirects => 5` w stream wrapperze oznaczało,
 - Klasteryzacja własna (zachłanna, haversine) zamiast MarkerClusterer — potrzebne były realne promienie w metrach i eksport członków skupiska
 - **Heatmapa — usunięta.** Google wycofał `visualization.HeatmapLayer` w Maps JS 3.65 (maj 2026); własna implementacja canvasowa nie dawała zadowalającej jakości. Wzór `ocena × log10(opinie+1)` pozostaje — zasila kolumnę „Wynik”, sortowanie i eksport
 - Widok Skupiska pokazuje listę **pogrupowaną**, nie płaską — wcześniej pod mapą ze skupiskami stała ta sama tabela co w trybie Lista i nie było widać przypisania lokali do skupisk
+- Eksport skupisk działa na **wyborze wielokrotnym** (checkboxy przy grupach), a nie na jednym klikniętym skupisku. Planowanie wizyt handlowych wymaga wzięcia kilku rejonów naraz. `exportCluster()` i osobny przycisk „Eksportuj skupisko do Excel" **usunięte** — po dodaniu checkboxów były redundantne i zaśmiecały sidebar. Przy okazji z `buildSheet` zniknął martwy tryb `'compact'`, używany wyłącznie przez ten eksport
 - Suwak skupiska podaje **rozpiętość, nie promień** (domyślnie 175 m), bo rozpiętość jest wielkością, którą użytkownik faktycznie odczuwa — „jak daleko mogą być od siebie dwa lokale w jednej grupie". Promień od punktu zaczepienia to szczegół implementacyjny algorytmu i przy poprzedniej wersji suwaka prowadził do liczenia kryterium o połowę za luźno
 - Wartość 175 m wyprowadzona z kryterium użytkowego (obchodzalność w 2–3 min pieszo), nie z „żeby coś pokazało". Wcześniej stało 400 m dobrane pod niepuste wyniki — kryterium obchodzalności wygrało, bo grupa rozciągnięta na 800 m nie jest trasą handlową, tylko dzielnicą
 - Domyślne minimum lokali obniżone z 3 na **2**: przy tak ciasnej rozpiętości para lokali to realnie ta sama ulica i użyteczna informacja przy wizytach handlowych, a minimum 3 dawało pusty widok w ~23% typowych wyszukiwań i ~75% przy lokalach rozproszonych. Legenda skupisk i `clusterColor()` już wcześniej traktowały 2 jako poprawny rozmiar („Małe — 2–3 lokale")
