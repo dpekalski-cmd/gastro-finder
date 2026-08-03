@@ -478,9 +478,10 @@
     color: var(--text-muted);
     margin-top: 2px;
   }
+  /* 2 wykresy → 2 kolumny, bez pustego miejsca po siatce 3-kolumnowej */
   .chart-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 12px;
   }
   .chart-box {
@@ -507,7 +508,7 @@
     flex-shrink: 0;
   }
 
-  /* ── WIDOK: LISTA / SKUPISKA / HEATMAPA ── */
+  /* ── WIDOK: LISTA / SKUPISKA ── */
   .view-toggle {
     display: flex;
     gap: 5px;
@@ -569,6 +570,59 @@
     border-radius: 50%;
     flex-shrink: 0;
   }
+
+  /* ── LISTA POGRUPOWANA PO SKUPISKACH ── */
+  /* Jedna tabela, po jednym <tbody> na skupisko — kolumny wyrównane między grupami */
+  .cl-nohit {
+    padding: 14px 18px;
+    font-size: 0.83rem;
+    color: var(--text-muted);
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  tr.cl-head > td {
+    padding: 10px 18px;
+    background: var(--surface2);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    white-space: normal;
+    max-width: none;
+  }
+  tr.cl-head { cursor: pointer; }
+  tr.cl-head:hover > td { background: rgba(217,119,87,0.08); }
+  .cl-group.selected tr.cl-head > td { background: rgba(217,119,87,0.14); }
+  .cl-group.selected tr:not(.cl-head) { background: rgba(217,119,87,0.04); }
+
+  .cl-dot {
+    display: inline-block;
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    margin-right: 8px;
+    vertical-align: -1px;
+  }
+  .cl-title { font-size: 0.86rem; font-weight: 600; color: var(--text); }
+  .cl-meta { font-size: 0.79rem; color: var(--text-muted); margin-left: 9px; }
+  .cl-area {
+    font-size: 0.72rem;
+    color: var(--accent);
+    background: rgba(217,119,87,0.1);
+    border-radius: 999px;
+    padding: 2px 9px;
+    margin-left: 9px;
+    white-space: nowrap;
+  }
+
+  /* Sekcja "poza skupiskami" — zwijana */
+  .cl-caret {
+    display: inline-block;
+    margin-right: 8px;
+    color: var(--text-muted);
+    transition: transform 0.15s;
+  }
+  .cl-caret::before { content: '▾'; }
+  .cl-outside.collapsed .cl-caret { transform: rotate(-90deg); }
+  .cl-outside.collapsed tr:not(.cl-head) { display: none; }
 
   /* Panel skupisk — info o klikniętym klastrze */
   .cluster-info-bar {
@@ -706,6 +760,13 @@
     .analytics-grid { padding: 8px 12px 16px; }
     .analytics-header { padding: 12px 12px 4px; }
 
+    /* Lista pogrupowana po skupiskach */
+    tr.cl-head > td { padding: 8px 12px; }
+    .cl-title { font-size: 0.8rem; }
+    .cl-meta { font-size: 0.72rem; margin-left: 6px; }
+    .cl-area { font-size: 0.68rem; margin-left: 6px; }
+    .cl-nohit { padding: 10px 12px; font-size: 0.76rem; }
+
     /* Ukryj zakładki */
     .mobile-tabs { display: none !important; }
   }
@@ -806,9 +867,6 @@
         <button class="view-btn" id="viewBtnCluster" onclick="switchView('cluster')">
           <span class="vbicon">🎯</span>Skupiska
         </button>
-        <button class="view-btn" id="viewBtnHeat" onclick="switchView('heatmap')">
-          <span class="vbicon">🌡️</span>Heatmapa
-        </button>
       </div>
     </div>
 
@@ -817,10 +875,10 @@
       <div>
         <div class="field-label">Promień skupiska</div>
         <div style="display:flex;align-items:center;gap:10px;">
-          <input type="range" id="clusterRadius" min="30" max="500" step="10" value="100"
+          <input type="range" id="clusterRadius" min="50" max="1500" step="25" value="400"
             style="flex:1;accent-color:var(--accent);cursor:pointer;"
             oninput="document.getElementById('clusterRadiusVal').textContent=this.value+'m'; recomputeClustersDebounced();"/>
-          <span id="clusterRadiusVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:44px;">100m</span>
+          <span id="clusterRadiusVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:52px;">400m</span>
         </div>
       </div>
       <div>
@@ -913,19 +971,11 @@
         <div class="analytics-grid" id="analyticsGrid">
           <!-- Row 1: Summary cards -->
           <div class="analytics-cards" id="summaryCards"></div>
-          <!-- Charts: 3 per row, square proportions -->
+          <!-- Charts: 2 per row, square proportions -->
           <div class="chart-grid">
             <div class="chart-box">
               <div class="chart-label">Rozkład ocen</div>
               <canvas id="chartRatings"></canvas>
-            </div>
-            <div class="chart-box">
-              <div class="chart-label">Top 5 vs pozostałe</div>
-              <canvas id="chartTopVsRest"></canvas>
-            </div>
-            <div class="chart-box">
-              <div class="chart-label">Rozkład Wyniku</div>
-              <canvas id="chartScores"></canvas>
             </div>
             <div class="chart-box">
               <div class="chart-label">Pokrycie dzielnic</div>
@@ -979,13 +1029,12 @@ let activeChip = 'cafe';
 let searchAborted = false;
 
 // ── STAN SKUPISK ──
-let activeView = 'list';          // 'list' | 'cluster' | 'heatmap'
+let activeView = 'list';          // 'list' | 'cluster'
 let clusterOverlays = [];         // wszystko co trzeba zdjąć z mapy (koła, etykiety, szare kropki)
 let clusterCircles = [];          // same koła, indeksowane równolegle do clusterData
 let clusterInfoWindows = [];      // InfoWindow trzeba zamykać ręcznie — setMap(null) ich nie usuwa
 let clusterData = [];             // obliczone skupiska
 let selectedClusterIdx = null;    // indeks klikniętego skupiska
-let heatmapLayer = null;          // własny HeatmapOverlay (OverlayView) — patrz niżej
 let clusterDebounceTimer = null;
 
 // ── WSPÓLNE HELPERY ──
@@ -1023,39 +1072,30 @@ function stopSearch() {
 // ══════════════════════════════════════════
 
 function switchView(view) {
+  if (view !== 'cluster') view = 'list';   // każda inna wartość → lista
   activeView = view;
   document.getElementById('viewBtnList').classList.toggle('active', view === 'list');
   document.getElementById('viewBtnCluster').classList.toggle('active', view === 'cluster');
-  document.getElementById('viewBtnHeat').classList.toggle('active', view === 'heatmap');
 
   const clusterParams = document.getElementById('clusterParams');
   const clusterLegend = document.getElementById('clusterLegend');
 
   // Zawsze czyść poprzedni stan
   clearClusterOverlays();
-  clearHeatmap();
   clearMarkers();
   document.getElementById('clusterExportBtn').classList.remove('visible');
   document.getElementById('clusterInfoBar').classList.remove('visible');
 
-  if (view === 'list') {
+  if (view === 'cluster') {
+    clusterParams.classList.add('visible');
+    clusterLegend.classList.add('visible');
+    if (results.length) recomputeClusters();
+  } else {
     clusterParams.classList.remove('visible');
     clusterLegend.classList.remove('visible');
     if (results.length) {
       addMarkers(results);
       renderResults(results);
-    }
-  } else if (view === 'cluster') {
-    clusterParams.classList.add('visible');
-    clusterLegend.classList.add('visible');
-    if (results.length) recomputeClusters();
-  } else if (view === 'heatmap') {
-    clusterParams.classList.remove('visible');
-    clusterLegend.classList.remove('visible');
-    if (results.length) {
-      // renderResults NAJPIERW — inaczej nadpisywał nagłówek ustawiony przez showHeatmap
-      renderResults(results);
-      showHeatmap(results);
     }
   }
 }
@@ -1065,237 +1105,10 @@ function switchView(view) {
 function refreshCurrentView() {
   if (!results.length) return;
   if (activeView === 'cluster') {
-    const sel = (selectedClusterIdx !== null) ? clusterData[selectedClusterIdx] : null;
-    renderClusterTable(sel ? sel.members : results, sel ? selectedClusterIdx : null);
+    renderClusterGroups();
   } else {
     renderResults(results);
   }
-}
-
-// ══════════════════════════════════════════
-// ── HEATMAPA (własna implementacja na canvasie) ──
-// google.maps.visualization.HeatmapLayer został usunięty z Maps JavaScript API
-// w wersji 3.65 (maj 2026). Google odsyła do deck.gl, ale to kilkaset kB
-// zależności dla jednego widoku — rysujemy więc sami.
-//
-// Algorytm (klasyczny, ten sam co w heatmap.js):
-//  1. dla każdego punktu rysujemy czarny radialny gradient z globalAlpha = waga;
-//     nakładające się punkty sumują alfę → kanał alfy staje się mapą gęstości
-//  2. odczytujemy piksele i podmieniamy kolor: wartość alfy (0–255) jest indeksem
-//     w 256-elementowej palecie zielony→żółty→czerwony
-// ══════════════════════════════════════════
-
-const HEAT_RADIUS = 35;      // px — tyle samo co dawne radius: 35
-const HEAT_OPACITY = 0.75;   // tyle samo co dawne opacity: 0.75
-const HEAT_GRADIENT = [
-  [0.00, 'rgba(0,0,0,0)'],
-  [0.20, 'rgba(58,158,110,0.6)'],
-  [0.40, 'rgba(217,200,87,0.75)'],
-  [0.60, 'rgba(217,150,87,0.85)'],
-  [0.80, 'rgba(217,87,87,0.9)'],
-  [1.00, 'rgba(180,30,30,1)'],
-];
-
-// Paleta 256 kolorów — liczona raz, potem tylko odczyt tablicy
-let heatPaletteCache = null;
-function heatPalette() {
-  if (heatPaletteCache) return heatPaletteCache;
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 1;
-  const ctx = c.getContext('2d');
-  const g = ctx.createLinearGradient(0, 0, 256, 0);
-  HEAT_GRADIENT.forEach(([stop, color]) => g.addColorStop(stop, color));
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 256, 1);
-  heatPaletteCache = ctx.getImageData(0, 0, 256, 1).data;
-  return heatPaletteCache;
-}
-
-// Gotowy "stempel" punktu — rysowany raz i powielany przez drawImage.
-// Tworzenie gradientu osobno dla każdego punktu w każdej klatce byłoby wolne.
-let heatStampCache = null;
-function heatStamp() {
-  if (heatStampCache) return heatStampCache;
-  const r = HEAT_RADIUS;
-  const c = document.createElement('canvas');
-  c.width = c.height = r * 2;
-  const ctx = c.getContext('2d');
-  const g = ctx.createRadialGradient(r, r, 0, r, r, r);
-  g.addColorStop(0, 'rgba(0,0,0,1)');
-  g.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, r * 2, r * 2);
-  heatStampCache = c;
-  return heatStampCache;
-}
-
-// Klasa musi powstać dopiero po załadowaniu Maps API — w momencie parsowania
-// skryptu google.maps.OverlayView jeszcze nie istnieje, więc `extends` by wybuchło.
-let HeatmapOverlayClass = null;
-function heatmapOverlayClass() {
-  if (HeatmapOverlayClass) return HeatmapOverlayClass;
-
-  HeatmapOverlayClass = class extends google.maps.OverlayView {
-    constructor(points, opts = {}) {
-      super();
-      this.points = points;                          // [{ latLng, weight }]
-      this.opacity = opts.opacity ?? HEAT_OPACITY;
-      this.canvas = null;
-      this.drawn = null;                             // ostatnio narysowany prostokąt
-    }
-
-    onAdd() {
-      const canvas = document.createElement('canvas');
-      canvas.style.position = 'absolute';
-      canvas.style.pointerEvents = 'none';           // nie przechwytuj kliknięć mapy
-      this.canvas = canvas;
-      // overlayLayer przesuwa się razem z mapą i leży pod markerami
-      this.getPanes().overlayLayer.appendChild(canvas);
-    }
-
-    onRemove() {
-      if (this.canvas?.parentNode) this.canvas.parentNode.removeChild(this.canvas);
-      this.canvas = null;
-      this.drawn = null;
-    }
-
-    draw() {
-      const proj = this.getProjection();
-      const map = this.getMap();
-      if (!proj || !map || !this.canvas) return;
-      const bounds = map.getBounds();
-      if (!bounds) return;
-
-      const sw = proj.fromLatLngToDivPixel(bounds.getSouthWest());
-      const ne = proj.fromLatLngToDivPixel(bounds.getNorthEast());
-      if (!sw || !ne) return;
-
-      const vLeft = Math.min(sw.x, ne.x);
-      const vTop = Math.min(sw.y, ne.y);
-      const vRight = Math.max(sw.x, ne.x);
-      const vBottom = Math.max(sw.y, ne.y);
-      const zoom = map.getZoom();
-
-      // draw() leci przy każdym przesunięciu mapy. Canvas siedzi w panelu, który
-      // przesuwa się razem z mapą, więc dopóki widok mieści się w tym, co już
-      // narysowaliśmy (z zapasem), nie ma czego przeliczać.
-      const d = this.drawn;
-      if (d && d.zoom === zoom &&
-          vLeft >= d.left && vTop >= d.top && vRight <= d.right && vBottom <= d.bottom) {
-        return;
-      }
-
-      const margin = 160;   // zapas, żeby drobne przesunięcia nie wymuszały przerysowania
-      const left = Math.floor(vLeft - margin);
-      const top = Math.floor(vTop - margin);
-      const width = Math.ceil(vRight - vLeft + margin * 2);
-      const height = Math.ceil(vBottom - vTop + margin * 2);
-      // Zabezpieczenie przed absurdalnym canvasem przy dziwnym stanie mapy
-      if (width < 1 || height < 1 || width > 4000 || height > 4000) return;
-
-      const canvas = this.canvas;
-      canvas.style.left = left + 'px';
-      canvas.style.top = top + 'px';
-      canvas.style.width = width + 'px';
-      canvas.style.height = height + 'px';
-      // Bufor w pikselach CSS, nie devicePixelRatio — na ekranach Retina to 4×
-      // mniej pikseli do przetworzenia, a heatmapa i tak jest rozmyta
-      canvas.width = width;
-      canvas.height = height;
-
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.clearRect(0, 0, width, height);
-
-      // ── 1. akumulacja alfy ──
-      const stamp = heatStamp();
-      const r = HEAT_RADIUS;
-      let painted = 0;
-      // Obszar faktycznie zamalowany — kolorujemy tylko jego, nie cały canvas.
-      // Przy skupiskach zajmujących część kadru to duża oszczędność.
-      let bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
-      for (const p of this.points) {
-        const px = proj.fromLatLngToDivPixel(p.latLng);
-        if (!px) continue;
-        const x = px.x - left;
-        const y = px.y - top;
-        if (x < -r || y < -r || x > width + r || y > height + r) continue;   // poza kadrem
-        ctx.globalAlpha = p.weight;
-        ctx.drawImage(stamp, x - r, y - r);
-        if (x - r < bMinX) bMinX = x - r;
-        if (y - r < bMinY) bMinY = y - r;
-        if (x + r > bMaxX) bMaxX = x + r;
-        if (y + r > bMaxY) bMaxY = y + r;
-        painted++;
-      }
-      ctx.globalAlpha = 1;
-      this.drawn = { left, top, right: left + width, bottom: top + height, zoom };
-      if (!painted) return;
-
-      // ── 2. kolorowanie przez paletę ──
-      const bx = Math.max(0, Math.floor(bMinX));
-      const by = Math.max(0, Math.floor(bMinY));
-      const bw = Math.min(width, Math.ceil(bMaxX)) - bx;
-      const bh = Math.min(height, Math.ceil(bMaxY)) - by;
-      if (bw < 1 || bh < 1) return;
-
-      const img = ctx.getImageData(bx, by, bw, bh);
-      const data = img.data;
-      const pal = heatPalette();
-      const op = this.opacity;
-      for (let i = 3; i < data.length; i += 4) {
-        const a = data[i];
-        if (a === 0) continue;          // przezroczyste piksele zostawiamy w spokoju
-        const o = a << 2;               // indeks w palecie = wartość alfy
-        data[i - 3] = pal[o];
-        data[i - 2] = pal[o + 1];
-        data[i - 1] = pal[o + 2];
-        data[i]     = pal[o + 3] * op;
-      }
-      ctx.putImageData(img, bx, by);
-    }
-  };
-
-  return HeatmapOverlayClass;
-}
-
-function clearHeatmap() {
-  if (heatmapLayer) {
-    heatmapLayer.setMap(null);   // OverlayView.setMap(null) wywoła onRemove()
-    heatmapLayer = null;
-  }
-}
-
-function showHeatmap(places) {
-  if (!map || !window.google?.maps?.OverlayView) return;
-  clearHeatmap();   // bez tego kolejne wyszukiwanie nakładało warstwy jedna na drugą
-
-  const pts = places
-    .filter(p => p.lat && p.lng)
-    .map(p => ({
-      latLng: new google.maps.LatLng(p.lat, p.lng),
-      // waga jak dotychczas: ocena znormalizowana do 0–1 × log10(opinie+1)
-      raw: Math.max(0.2, ((p.rating || 0) - 3) / 2 * Math.log10((p.reviews || 0) + 1)),
-    }));
-  if (!pts.length) return;
-
-  // Normalizacja do 0–1 względem najmocniejszego punktu. Bez tego przy małym
-  // zbiorze wyników heatmapa byłaby ledwo widoczna, a przy dużym — cała czerwona.
-  const maxW = pts.reduce((m, p) => Math.max(m, p.raw), 0) || 1;
-  pts.forEach(p => { p.weight = Math.max(0.08, p.raw / maxW); });
-
-  const Overlay = heatmapOverlayClass();
-  heatmapLayer = new Overlay(pts, { opacity: HEAT_OPACITY });
-  heatmapLayer.setMap(map);
-
-  // Dopasuj zoom do danych
-  if (places.length > 0) {
-    const bounds = new google.maps.LatLngBounds();
-    places.forEach(p => { if (p.lat) bounds.extend({ lat: p.lat, lng: p.lng }); });
-    map.fitBounds(bounds);
-  }
-
-  document.getElementById('resultsTitle').innerHTML =
-    `<strong>Heatmapa</strong> · ${places.length} lokali · intensywność = ocena × log(opinie)`;
 }
 
 // ── ALGORYTM KLASTERYZACJI (grid-based) ──
@@ -1431,7 +1244,7 @@ function recomputeClusters() {
   if (!clusterData.length) {
     document.getElementById('resultsTitle').innerHTML =
       `<strong>0 skupisk</strong> · zwiększ promień lub zmniejsz min. lokali`;
-    renderClusterTable(results, null);
+    renderClusterGroups();
     return;
   }
 
@@ -1512,14 +1325,17 @@ function recomputeClusters() {
   });
 
   const totalInClusters = clusterData.reduce((s, c) => s + c.count, 0);
-  const outsideCount = results.length - totalInClusters;
+  const city = document.getElementById('cityInput').value;
   document.getElementById('resultsTitle').innerHTML =
-    `<strong>${clusterData.length} skupisk</strong> · ${totalInClusters} lokali w skupiskach · ${outsideCount} poza`;
+    `<strong>${clusterData.length} ${plSkupisk(clusterData.length)}</strong> · ${totalInClusters} ${plLokal(totalInClusters)}` +
+    ` · ${esc(typeLabel(activeChip))} · ${esc(city)}`;
+  // liczba lokali poza skupiskami jest w nagłówku sekcji "Lokale poza skupiskami"
 
-  renderClusterTable(results, null);
+  renderClusterGroups();
 }
 
-function selectCluster(idx) {
+// scrollToGroup=false przy kliknięciu w nagłówek na liście — użytkownik już tam patrzy
+function selectCluster(idx, scrollToGroup = true) {
   const cl = clusterData[idx];
   if (!cl) return;
   selectedClusterIdx = idx;
@@ -1542,11 +1358,23 @@ function selectCluster(idx) {
   const bar = document.getElementById('clusterInfoBar');
   bar.classList.add('visible');
   document.getElementById('clusterInfoText').innerHTML =
-    `Skupisko <strong>#${idx + 1}</strong>: <strong>${cl.count} lokali</strong> w promieniu ${cl.radius}m · śr. ocena <strong>★${cl.avgRating}</strong>`;
+    `Skupisko <strong>#${idx + 1}</strong>: <strong>${cl.count} ${plLokal(cl.count)}</strong> w promieniu ${cl.radius}m · śr. ocena <strong>★${cl.avgRating}</strong>`;
 
   document.getElementById('clusterExportBtn').classList.add('visible');
 
-  renderClusterTable(cl.members, idx);
+  // Lista jest pogrupowana, więc zamiast filtrować tabelę podświetlamy grupę
+  document.querySelectorAll('.cl-group.selected').forEach(g => g.classList.remove('selected'));
+  const group = document.getElementById('clGroup' + idx);
+  if (group) {
+    group.classList.add('selected');
+    if (scrollToGroup) group.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+// Klik w nagłówek skupiska na liście → wyśrodkuj mapę na tym skupisku
+function focusCluster(idx) {
+  if (!map) return;
+  selectCluster(idx, false);
 }
 
 function clearClusterSelection() {
@@ -1562,79 +1390,156 @@ function clearClusterSelection() {
     circleObj.setOptions({ fillOpacity: colors.fillOpacity, strokeOpacity: colors.strokeOpacity, strokeWeight: 1.5 });
   });
 
-  renderClusterTable(results, null);
+  document.querySelectorAll('.cl-group.selected').forEach(g => g.classList.remove('selected'));
 }
 
 // ══════════════════════════════════════════
 // ── WSPÓLNY RENDERER TABELI ──
-// renderResults i renderClusterTable były niemal identyczne (~90 linii duplikatu).
+// Używany zarówno przez widok Lista (tryb 'full'), jak i przez wiersze lokali
+// wewnątrz grup w widoku Skupiska (tryb 'compact') — jeden renderer, nie dwa.
 // mode 'full'    = widok listy (dodatkowo Kraj i Miasto)
 // mode 'compact' = widok skupisk
 // ══════════════════════════════════════════
-function buildTableHtml(data, { mode = 'full', badgeFor = null, rowClick } = {}) {
+// mode 'full'    = widok listy — pełny zestaw kolumn z Krajem, Miastem i Dzielnicą
+// mode 'compact' = wiersze wewnątrz skupiska — bez Kraju/Miasta/Dzielnicy, bo w obrębie
+//                  jednego skupiska są identyczne dla wszystkich lokali i tylko zajmują miejsce
+// Rozbite na części, żeby widok Skupiska mógł złożyć JEDNĄ tabelę z wieloma
+// sekcjami (osobne <table> per skupisko rozjeżdżałyby szerokości kolumn),
+// nie duplikując przy tym renderowania wiersza.
+function tableColumns(mode) {
   const isCompanyMode = (activeChip === 'company');
   const full = (mode === 'full');
+  return [
+    '#', 'Nazwa',
+    ...(isCompanyMode ? ['Branża'] : []),
+    'Ocena', full ? 'Liczba opinii' : 'Opinii', 'Wynik',
+    ...(full ? ['Kraj', 'Miasto', 'Dzielnica'] : []),
+    'Ulica', 'Telefon', 'E-mail', 'Strona WWW',
+  ];
+}
 
-  const head =
-    '<th>#</th><th>Nazwa</th>' +
-    (isCompanyMode ? '<th>Branża</th>' : '') +
-    '<th>Ocena</th>' +
-    (full ? '<th>Liczba opinii</th>' : '<th>Opinii</th>') +
-    '<th>Wynik</th>' +
-    (full ? '<th>Kraj</th><th>Miasto</th>' : '') +
-    '<th>Dzielnica</th><th>Ulica</th><th>Telefon</th><th>E-mail</th><th>Strona WWW</th>';
+function tableHeadHtml(mode) {
+  return '<tr>' + tableColumns(mode).map(c => `<th>${c}</th>`).join('') + '</tr>';
+}
 
-  const rows = data.map((p, i) => `
+// startIndex — numeracja wierszy startuje od 1 w każdej sekcji skupiska
+function tableRowsHtml(data, mode, rowClick) {
+  const isCompanyMode = (activeChip === 'company');
+  const full = (mode === 'full');
+  return data.map((p, i) => `
     <tr onclick="${rowClick(p, i)}">
-      <td class="rank-cell">#${i + 1}${badgeFor ? badgeFor(p) : ''}</td>
+      <td class="rank-cell">#${i + 1}</td>
       <td class="name-cell" title="${escAttr(p.name)}">${esc(p.name)}</td>
       ${isCompanyMode ? `<td>${esc(p.industry || '—')}</td>` : ''}
       <td><span class="rating-badge"><span class="star">★</span>${(p.rating || 0).toFixed(1)}</span></td>
       <td class="reviews-count">${(p.reviews || 0).toLocaleString('pl')}</td>
       <td><strong>${scoreOf(p).toFixed(1)}</strong></td>
-      ${full ? `<td>${esc(p.country)}</td><td>${esc(p.city)}</td>` : ''}
-      <td>${esc(p.district)}</td>
+      ${full ? `<td>${esc(p.country)}</td><td>${esc(p.city)}</td><td>${esc(p.district)}</td>` : ''}
       <td title="${escAttr(p.street)}">${esc(p.street)}</td>
       <td>${esc(p.phone)}</td>
       <td class="link-cell">${p.email ? `<a href="mailto:${escAttr(p.email)}">${esc(p.email)}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td class="link-cell">${p.website && /^https?:\/\//i.test(p.website) ? `<a href="${escAttr(p.website)}" target="_blank" rel="noopener noreferrer">↗ www</a>` : '—'}</td>
     </tr>`).join('');
+}
 
-  return `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+function buildTableHtml(data, { mode = 'full', rowClick } = {}) {
+  return `<table><thead>${tableHeadHtml(mode)}</thead><tbody>${tableRowsHtml(data, mode, rowClick)}</tbody></table>`;
 }
 
 function emptyState(msg) {
   return `<div class="empty-state"><div class="empty-icon">🔍</div><div>${esc(msg)}</div></div>`;
 }
 
-function renderClusterTable(data, clusterIdx) {
-  if (!data.length) {
-    document.getElementById('tableContainer').innerHTML =
-      emptyState('Brak lokali w skupiskach dla podanych parametrów');
+// Polska odmiana liczebnika — "1 lokal", "4 lokale", "7 lokali"
+function plural(n, one, few, many) {
+  const t = n % 10, s = n % 100;
+  if (n === 1) return one;
+  if (t >= 2 && t <= 4 && !(s >= 12 && s <= 14)) return few;
+  return many;
+}
+const plLokal = (n) => plural(n, 'lokal', 'lokale', 'lokali');
+const plSkupisk = (n) => plural(n, 'skupisko', 'skupiska', 'skupisk');
+
+// Nazwa obszaru skupiska = dominująca ulica wśród jego lokali.
+// Pokazujemy ją TYLKO gdy naprawdę dominuje — inaczej byłaby to zmyślona etykieta.
+function clusterAreaLabel(members) {
+  const counts = new Map();
+  for (const m of members) {
+    // utnij numer budynku: "Zgoda 3" → "Zgoda"
+    const street = (m.street || '').replace(/\s+\d+\S*$/, '').trim();
+    if (!street) continue;
+    counts.set(street, (counts.get(street) || 0) + 1);
+  }
+  if (!counts.size) return '';
+  const [best, n] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  return (n >= 2 && n / members.length >= 0.4) ? best : '';
+}
+
+const CLUSTER_ROW_CLICK = (p) => `focusOnMap(${Number(p.lat) || 0},${Number(p.lng) || 0})`;
+
+// Widok Skupiska: JEDNA tabela, w niej po jednym <tbody> na skupisko.
+// Wiersze lokali renderuje ten sam tableRowsHtml co widok Lista — jeden wspólny
+// nagłówek kolumn gwarantuje, że kolumny są wyrównane we wszystkich grupach.
+function renderClusterGroups() {
+  const el = document.getElementById('tableContainer');
+  const nCols = tableColumns('compact').length;
+
+  const inCluster = new Set();
+  clusterData.forEach(cl => cl.members.forEach(m => inCluster.add(m)));
+  const outside = results.filter(p => !inCluster.has(p))
+                         .sort((a, b) => scoreOf(b) - scoreOf(a));
+
+  // clusterData jest już posortowane malejąco po liczbie lokali (computeClusters)
+  const groups = clusterData.map((cl, idx) => {
+    const members = [...cl.members].sort((a, b) => scoreOf(b) - scoreOf(a));
+    const col = clusterColor(cl.count).strokeColor;   // ten sam kolor co koło na mapie
+    const area = clusterAreaLabel(members);
+    return `
+      <tbody class="cl-group" id="clGroup${idx}">
+        <tr class="cl-head" onclick="focusCluster(${idx})" title="Wyśrodkuj mapę na tym skupisku">
+          <td colspan="${nCols}">
+            <span class="cl-dot" style="background:${col};"></span>
+            <span class="cl-title">Skupisko ${idx + 1}</span>
+            <span class="cl-meta">${cl.count} ${plLokal(cl.count)} · śr. ocena ★${cl.avgRating}</span>
+            ${area ? `<span class="cl-area">${esc(area)}</span>` : ''}
+          </td>
+        </tr>
+        ${tableRowsHtml(members, 'compact', CLUSTER_ROW_CLICK)}
+      </tbody>`;
+  }).join('');
+
+  const outsideHtml = outside.length ? `
+      <tbody class="cl-outside collapsed" id="clOutside">
+        <tr class="cl-head" onclick="toggleOutside()">
+          <td colspan="${nCols}">
+            <span class="cl-caret"></span>
+            <span class="cl-title">Lokale poza skupiskami</span>
+            <span class="cl-meta">${outside.length}</span>
+          </td>
+        </tr>
+        ${tableRowsHtml(outside, 'compact', CLUSTER_ROW_CLICK)}
+      </tbody>` : '';
+
+  if (!clusterData.length && !outside.length) {
+    el.innerHTML = emptyState('Brak wyników dla podanych kryteriów');
     return;
   }
 
-  // Przypisanie lokal → numer skupiska liczone RAZ.
-  // Wcześniej każdy wiersz robił findIndex + some po wszystkich skupiskach — O(n²).
-  let badgeFor = null;
-  if (clusterIdx === null && clusterData.length) {
-    const clusterOfPlace = new Map();
-    clusterData.forEach((cl, ci) => cl.members.forEach(m => {
-      if (!clusterOfPlace.has(m)) clusterOfPlace.set(m, ci);
-    }));
-    badgeFor = (p) => {
-      const ci = clusterOfPlace.get(p);
-      if (ci === undefined) return '';
-      const col = clusterColor(clusterData[ci].count).strokeColor;
-      return `<span style="display:inline-block;padding:1px 7px;border-radius:999px;font-size:0.68rem;font-weight:600;background:${col};color:#fff;margin-left:4px;">S${ci + 1}</span>`;
-    };
-  }
+  const hint = clusterData.length ? '' :
+    `<div class="cl-nohit">Brak skupisk dla podanych parametrów — zwiększ promień lub zmniejsz min. lokali</div>`;
 
-  document.getElementById('tableContainer').innerHTML = buildTableHtml(data, {
-    mode: 'compact',
-    badgeFor,
-    rowClick: (p) => `focusOnMap(${Number(p.lat) || 0},${Number(p.lng) || 0})`,
-  });
+  el.innerHTML = hint +
+    `<table class="cl-table"><thead>${tableHeadHtml('compact')}</thead>${groups}${outsideHtml}</table>`;
+
+  // Przywróć podświetlenie, jeśli jakieś skupisko było wybrane na mapie
+  if (selectedClusterIdx !== null) {
+    document.getElementById('clGroup' + selectedClusterIdx)?.classList.add('selected');
+  }
+}
+
+// Sekcja "poza skupiskami" — domyślnie zwinięta
+function toggleOutside() {
+  document.getElementById('clOutside')?.classList.toggle('collapsed');
 }
 
 function focusOnMap(lat, lng) {
@@ -1742,7 +1647,6 @@ function initWithKey() {
 
 function loadGoogleMaps() {
   const script = document.createElement('script');
-  // visualization usunięte — HeatmapLayer zniknął z API 3.65, mamy własną heatmapę
   script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=onMapsReady`;
   script.async = true;
   script.onerror = () => alert('Nie można załadować Google Maps. Sprawdź klucz API i upewnij się, że masz włączone Maps JavaScript API + Places API.');
@@ -1812,7 +1716,6 @@ async function doSearch(city) {
   selectedClusterIdx = null;
   clearMarkers();
   clearClusterOverlays();   // poprzednie wyszukiwanie zostawiało koła i InfoWindow na mapie
-  clearHeatmap();
   const isMobile = window.innerWidth <= 700;
 
   function dbg(msg) {
@@ -1967,9 +1870,6 @@ async function doSearch(city) {
         if (activeView === 'cluster') {
           clearMarkers();
           recomputeClusters();
-        } else if (activeView === 'heatmap') {
-          clearMarkers();
-          showHeatmap(results);
         } else {
           addMarkers(results);
         }
@@ -2557,91 +2457,7 @@ function renderAnalytics(data) {
     }
   }));
 
-  // ── Chart 2: Top 5 vs reszta ──
-  const top5 = data.slice(0, 5);
-  const rest = data.slice(5);
-  const top5Avg = top5.length ? (top5.reduce((s,p) => s+p.rating, 0) / top5.length).toFixed(2) : 0;
-  const restAvg = rest.length ? (rest.reduce((s,p) => s+p.rating, 0) / rest.length).toFixed(2) : 0;
-  const top5Rev = top5.length ? Math.round(top5.reduce((s,p) => s+p.reviews, 0) / top5.length) : 0;
-  const restRev = rest.length ? Math.round(rest.reduce((s,p) => s+p.reviews, 0) / rest.length) : 0;
-
-  chartInstances.push(new Chart(document.getElementById('chartTopVsRest'), {
-    type: 'bar',
-    data: {
-      labels: ['Śr. ocena', 'Śr. opinii (÷100)'],
-      datasets: [
-        {
-          label: 'Top 5',
-          data: [top5Avg, (top5Rev / 100).toFixed(1)],
-          backgroundColor: accent,
-          borderRadius: 4,
-        },
-        {
-          label: 'Pozostałe',
-          data: [restAvg, (restRev / 100).toFixed(1)],
-          backgroundColor: 'rgba(217,119,87,0.25)',
-          borderRadius: 4,
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } },
-      scales: {
-        y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } },
-        x: { grid: { display: false } }
-      }
-    }
-  }));
-
-  // ── Chart 3: Rozkład wyników (scatter) ──
-  const scatterData = data.map(p => ({
-    x: p.reviews,
-    y: p.rating,
-    label: p.name,
-  }));
-
-  // Średnia liczona RAZ. Wcześniej reduce po całym zbiorze siedział w środku map()
-  // — O(n²) — a przy minReviews=0 dzielenie przez zero dawało NaN i wykres znikał.
-  const meanReviews = (totalReviews / data.length) || 1;
-
-  chartInstances.push(new Chart(document.getElementById('chartScores'), {
-    type: 'bubble',
-    data: {
-      datasets: [{
-        data: scatterData.map(d => ({
-          x: d.x,
-          y: d.y,
-          r: Math.max(4, Math.min(18, (d.x / meanReviews) * 8)) || 4,
-        })),
-        backgroundColor: 'rgba(217,119,87,0.35)',
-        borderColor: accent,
-        borderWidth: 1,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const d = scatterData[ctx.dataIndex];
-              return `${d.label}: ★${d.y} · ${d.x} opinii`;
-            }
-          }
-        }
-      },
-      scales: {
-        x: { title: { display: true, text: 'Liczba opinii', font: { size: 10 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
-        y: { title: { display: true, text: 'Ocena', font: { size: 10 } }, min: 3.0, max: 5.1, grid: { color: 'rgba(0,0,0,0.05)' } }
-      }
-    }
-  }));
-
-  // ── Chart 4: Pokrycie dzielnic ──
+  // ── Chart 2: Pokrycie dzielnic ──
   const districtCounts = {};
   data.forEach(p => {
     const d = p.district || '(brak danych)';

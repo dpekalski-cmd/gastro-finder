@@ -1,7 +1,7 @@
 # Gastro Finder — Kontekst projektu
 
 ## Co to jest
-Jednostronicowa aplikacja HTML (index.html, ~2500 linii) do wyszukiwania lokali gastronomicznych i firm na Google Maps, z analityką, widokami skupisk/heatmapy i eksportem do Excel. Hostowana na GitHub Pages: https://dpekalski-cmd.github.io/gastro-finder/ (repo: dpekalski-cmd/gastro-finder).
+Jednostronicowa aplikacja HTML (index.html, ~2500 linii) do wyszukiwania lokali gastronomicznych i firm na Google Maps, z analityką, widokiem skupisk i eksportem do Excel. Hostowana na GitHub Pages: https://dpekalski-cmd.github.io/gastro-finder/ (repo: dpekalski-cmd/gastro-finder).
 
 Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin) — scrapuje emaile ze stron www lokali.
 
@@ -22,33 +22,43 @@ Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin)
 - Min. ocena (3.0–5.0), min. liczba opinii (0–500) — `passesQualityFilter`
 - Blacklisty typów i nazw (`isBlacklisted`) — osobne dla gastro i firm
 
-### Widoki (przełącznik „Tryb widoku": Lista / Skupiska / Heatmapa)
+### Widoki (przełącznik „Tryb widoku": Lista / Skupiska)
 - **Lista** — klasyczne markery numerowane + tabela z rankingiem
-- **Skupiska** — klasteryzacja geograficzna:
-  - Algorytm zachłanny: dla każdego punktu liczymy sąsiadów w promieniu R (haversine), bierzemy punkt o największej gęstości, tworzymy skupisko, usuwamy członków z puli, powtarzamy
-  - Parametry: promień 30–500 m (domyślnie 100), min. lokali w skupisku 2–12 (domyślnie 3) — zmiana slidera przelicza na żywo (`recomputeClusters`)
-  - Na mapie: koła Circle kolorowane wg wielkości (7+ czerwone, 5–6 pomarańczowe, 4 żółte, 2–3 zielone) + InfoWindow z licznikiem i śr. oceną; lokale poza skupiskami jako szare kropki
-  - Legenda skupisk w sidebarze
-  - Klik w skupisko → pan/zoom, pasek info nad tabelą, filtrowanie tabeli do członków skupiska, przycisk „Eksportuj skupisko do Excel" (osobny arkusz + zakładka Info z metadanymi)
-  - Tabela w trybie skupisk ma badge `S1`, `S2`… przy lokalach przypisanych do skupisk
-- **Heatmapa** — **własna implementacja** na `google.maps.OverlayView` + canvas (klasa tworzona leniwie przez `heatmapOverlayClass()`, bo `OverlayView` nie istnieje w czasie parsowania skryptu). Waga punktu = `max(0.2, (rating-3)/2 × log10(reviews+1))`, normalizowana do 0–1 względem najmocniejszego punktu. Promień 35 px, opacity 0.75, gradient zielony→żółty→czerwony — identyczne wartości jak w usuniętym `HeatmapLayer`. Auto-fitBounds
-  - Algorytm: radialny gradient („stempel") rysowany raz i powielany przez `drawImage` z `globalAlpha = waga` → nakładające się punkty sumują alfę, która staje się mapą gęstości; potem kanał alfy służy jako indeks w 256-elementowej palecie
-  - Optymalizacje: `draw()` pomija przerysowanie, dopóki widok mieści się w narysowanym obszarze (margines 160 px) — panoramowanie obsługuje sam panel mapy; kolorowany jest tylko prostokąt faktycznie zamalowany; bufor w pikselach CSS, nie `devicePixelRatio` (4× mniej pikseli na Retinie)
-  - Zmierzone: ~5 ms (100 punktów), ~11 ms (300), ~16,5 ms (500) na pełny render; pełny render tylko przy zoomie i większych przesunięciach
+- **Skupiska** — klasteryzacja geograficzna + lista pogrupowana pod mapą
+
+  **Algorytm** (`computeClusters`) — zachłanny, liczony na siatce przestrzennej:
+  - sąsiedztwa liczone raz przez siatkę o komórce = promień (każdy sąsiad leży w oknie 3×3), potem w pętli bierzemy punkt o największej liczbie żywych sąsiadów, tworzymy z nich skupisko, usuwamy z puli i aktualizujemy liczniki tylko tych punktów, których to dotyczy
+  - skupiska sortowane malejąco po liczbie lokali
+  - to nie jest DBSCAN — nie ma pojęcia punktu granicznego ani rdzeniowego, każdy lokal trafia do co najwyżej jednego skupiska
+
+  **Parametry** (sidebar, przeliczane na żywo z debounce 130 ms):
+  - promień skupiska: 50–1500 m, krok 25, **domyślnie 400 m**. Wcześniej domyślne 100 m przy typowym wyszukiwaniu (20 lokali w dzielnicy) dawało zero skupisk i pierwsze wejście w ten widok wyglądało jak awaria
+  - min. lokali w skupisku: 2–12, domyślnie 3
+
+  **Na mapie**: koła `Circle` kolorowane wg wielkości przez `clusterColor()` (7+ czerwone, 5–6 pomarańczowe, 4 żółte, 2–3 zielone) + InfoWindow z licznikiem i śr. oceną; lokale poza skupiskami jako szare kropki. Legenda w sidebarze używa tych samych progów i kolorów.
+
+  **Lista pod mapą** (`renderClusterGroups`) — pogrupowana po skupiskach, nie płaska:
+  - jedna wspólna `<table>`, w niej po jednym `<tbody>` na skupisko. Osobne tabele per grupa rozjeżdżałyby szerokości kolumn (auto-layout dobiera je niezależnie dla każdej tabeli)
+  - nagłówek grupy: kropka w kolorze z `clusterColor()` (ten sam co koło na mapie), numer, liczba lokali, śr. ocena i — jeśli wyraźnie dominuje — nazwa ulicy (`clusterAreaLabel`: pokazywana tylko gdy ≥2 lokale i ≥40% członków, żeby nie zmyślać etykiety)
+  - kolumny bez Kraju/Miasta/Dzielnicy — w obrębie skupiska identyczne dla wszystkich lokali
+  - lokale wewnątrz skupiska sortowane malejąco po Wyniku
+  - lokale poza skupiskami w sekcji na końcu, domyślnie zwiniętej, z licznikiem
+  - klik w nagłówek grupy → wyśrodkowanie mapy na skupisku; klik w wiersz → focus lokalu
+  - klik w skupisko na mapie → podświetlenie grupy na liście (nie filtrowanie), pasek info i przycisk „Eksportuj skupisko do Excel" (osobny arkusz + zakładka Info z metadanymi)
+
+  Renderer wierszy jest wspólny z widokiem Lista — `buildTableHtml` rozbite na `tableColumns` / `tableHeadHtml` / `tableRowsHtml`, tryb `full` dla Listy i `compact` dla grup.
 
 ### Analityka (Chart.js)
 - 4 karty summary: liczba lokali, śr. ocena, łącznie opinii, śr. Wynik
-- 4 wykresy w siatce 3-w-linii, kwadratowe proporcje:
+- 2 wykresy w siatce 2-w-linii, kwadratowe proporcje (na mobile 1 kolumna, 4:3):
   1. Rozkład ocen (histogram, 6 koszyków)
-  2. Top 5 vs pozostałe (śr. ocena i śr. opinii ÷100)
-  3. Rozkład Wyniku (bubble chart: opinie × ocena, rozmiar = względna liczba opinii)
-  4. Pokrycie dzielnic (doughnut ≤8 dzielnic, poziomy bar powyżej)
-- Kolumna „Wynik" = `rating × log10(reviews+1)` — po tym sortowany ranking
+  2. Pokrycie dzielnic (doughnut ≤8 dzielnic, poziomy bar powyżej)
+- Kolumna „Wynik" = `rating × log10(reviews+1)` (`scoreOf`) — po tym sortowany ranking, ta sama funkcja zasila tabelę, sortowanie i eksport Excel
 
 ### Pozostałe
 - Email scraping (warunkowy, checkbox „Szukaj adresów e-mail") — PHP backend przeszukuje stronę główną → podstrony /kontakt (max 3, wykrywane z linków lub zgadywane) → guessEmails przez DNS MX + weryfikacja SMTP RCPT TO
 - Eksport Excel (SheetJS) — arkusz danych + arkusz „Informacje"; kolumna Branża w trybie Firmy
-- Klucz API wpisywany przez użytkownika (overlay na starcie), ładowany z `libraries=places,visualization`
+- Klucz API wpisywany przez użytkownika (overlay na starcie), ładowany z `libraries=places`
 - Zabezpieczenia: XSS (`esc()` — jedna implementacja escapująca `& < > " '`), walidacja `https?://` przy linkach, walidacja formatu klucza API, walidacja emaili z backendu, sanityzacja nazwy pliku eksportu
 
 ## Backend: email-scraper.php v5 (hardening)
@@ -67,20 +77,18 @@ Wersja v4 miała lukę SSRF: `max_redirects => 5` w stream wrapperze oznaczało,
 - `rawurldecode` zamiast `urldecode` — ten drugi zamieniał `+` na spację i psuł adresy typu `jan+kontakt@domena.pl`
 
 ## Architektura techniczna
-- Frontend: czysty HTML/CSS/JS, Google Maps JavaScript API + Places API (legacy/classic), Chart.js 4.4.1, SheetJS 0.18.5. Biblioteka `visualization` **nie jest już ładowana** — `libraries=places`
+- Frontend: czysty HTML/CSS/JS, Google Maps JavaScript API + Places API (legacy/classic), Chart.js 4.4.1, SheetJS 0.18.5
 - Backend: PHP na plonpol.pl/email-scraper.php
 - Hosting frontend: GitHub Pages (dpekalski-cmd/gastro-finder)
 - Paleta kolorów: Claude.ai (akcent #D97757), font Inter
 
 ## Znane ograniczenia
-- **`google.maps.visualization.HeatmapLayer` został usunięty z Maps JavaScript API w wersji 3.65 (maj 2026)** — dlatego heatmapa jest własna, a nie z Google. Oficjalną rekomendacją Google jest deck.gl, ale to kilkaset kB zależności dla jednego widoku w aplikacji, która poza tym nie ma żadnego bundlera ani zależności npm. Własna klasa na `OverlayView` to ~120 linii i zero nowych plików. Konsekwencja: przy zmianie API paneli/projekcji w Maps JS trzeba to samodzielnie utrzymać
-- Heatmapa nie skaluje promienia z zoomem (35 px niezależnie od skali) — tak samo zachowywał się `HeatmapLayer`, ale przy mocnym oddaleniu skupiska zlewają się w jedną plamę
 - Zmiana klucza wyszukiwania Google: `google.maps.Geocoder` wymaga **osobno włączonego Geocoding API** w Google Cloud Console (oraz obecności Geocoding API na liście *API restrictions* klucza). Bez tego geokoder zwraca `REQUEST_DENIED` i wyszukiwanie nie startuje wcale
 - nearbySearch zwraca max 20 wyników/punkt (brak paginacji przy rankBy:DISTANCE)
 - Google nie udostępnia emaili ani historii ocen
 - Email scraper nie działa dla Facebook/Instagram (JavaScript rendering)
 - Weryfikacja SMTP (port 25) może być zablokowana na hostingu współdzielonym
-- **Na mobile (≤700px) mapa jest ukryta przez CSS `!important`** — widoki Skupiska i Heatmapa są tam bezużyteczne (`recomputeClusters`/`showHeatmap` wymagają mapy); po wyszukiwaniu na mobile rysowanie markerów/klastrów jest pomijane
+- **Na mobile (≤700px) mapa jest ukryta przez CSS `!important`** — widok Skupiska jest tam bezużyteczny (`recomputeClusters` wymaga mapy); po wyszukiwaniu na mobile rysowanie markerów/klastrów jest pomijane
 - Zakładki mobilne (`.mobile-tabs`) są ukryte — układ na mobile jest jednokolumnowy, przewijalny; `switchTab()` pozostał w kodzie jako martwy
 - Na mobile (iOS) działa tylko przez hosting (nie file://)
 - Tryb Firmy zwraca głównie biura rachunkowe — potencjał do poprawy keywordów
@@ -94,8 +102,10 @@ Wersja v4 miała lukę SSRF: `max_redirects => 5` w stream wrapperze oznaczało,
 - Siatka pełna dla gastro (jeden keyword), 4-punktowa × wiele keywordów dla firm
 - Facebook email scraping: próba /about, potem guessEmails przez MX/SMTP
 - Klasteryzacja własna (zachłanna, haversine) zamiast MarkerClusterer — potrzebne były realne promienie w metrach i eksport członków skupiska
-- Heatmapa waży punkty jakością (ocena × log opinii), nie samą liczbą lokali
-- Heatmapa własna zamiast deck.gl po usunięciu `HeatmapLayer` — priorytetem było niedokładanie ciężkiej zależności do aplikacji jednoplikowej. Zachowane te same parametry wizualne (promień, opacity, gradient), więc widok wygląda jak wcześniej
+- **Heatmapa — usunięta.** Google wycofał `visualization.HeatmapLayer` w Maps JS 3.65 (maj 2026); własna implementacja canvasowa nie dawała zadowalającej jakości. Wzór `ocena × log10(opinie+1)` pozostaje — zasila kolumnę „Wynik”, sortowanie i eksport
+- Widok Skupiska pokazuje listę **pogrupowaną**, nie płaską — wcześniej pod mapą ze skupiskami stała ta sama tabela co w trybie Lista i nie było widać przypisania lokali do skupisk
+- Domyślny promień skupiska 400 m (nie 100 m) — dobrany tak, żeby typowe wyszukiwanie od razu dawało niepuste skupiska
+- Z dashboardu usunięte „Top 5 vs pozostałe" i „Rozkład Wyniku" (bubble) — zostawiono dwa wykresy, które faktycznie były czytane
 - Klasteryzacja liczona na siatce przestrzennej (komórka = promień, sąsiedzi w oknie 3×3), z punktowym odświeżaniem liczników po wycięciu skupiska — semantyka zachłanna identyczna jak w wersji naiwnej, ale bez O(n³). Zweryfikowane: te same skupiska, 100–600× szybciej (500 lokali: 5,1 s → 8 ms)
 - Żądania do Places API idą równolegle z limitem współbieżności (4 dla nearbySearch, 6 dla getDetails) + retry na `OVER_QUERY_LIMIT`; sekwencyjne pobieranie było wąskim gardłem całej aplikacji
 
@@ -104,4 +114,4 @@ Wersja v4 miała lukę SSRF: `max_redirects => 5` w stream wrapperze oznaczało,
 - PWA (Progressive Web App) do „zainstalowania" na iOS
 - Lepszy email scraping (headless browser — wymaga VPS)
 - Poprawa trybu Firmy (więcej branż, lepsze filtrowanie)
-- Widok skupisk/heatmapy na mobile (wymaga pokazania mapy na małych ekranach)
+- Widok skupisk na mobile (wymaga pokazania mapy na małych ekranach)
