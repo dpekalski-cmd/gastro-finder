@@ -818,7 +818,7 @@
         <div style="display:flex;align-items:center;gap:10px;">
           <input type="range" id="clusterRadius" min="30" max="500" step="10" value="100"
             style="flex:1;accent-color:var(--accent);cursor:pointer;"
-            oninput="document.getElementById('clusterRadiusVal').textContent=this.value+'m'; recomputeClusters();"/>
+            oninput="document.getElementById('clusterRadiusVal').textContent=this.value+'m'; recomputeClustersDebounced();"/>
           <span id="clusterRadiusVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:44px;">100m</span>
         </div>
       </div>
@@ -827,7 +827,7 @@
         <div style="display:flex;align-items:center;gap:10px;">
           <input type="range" id="clusterMin" min="2" max="12" step="1" value="3"
             style="flex:1;accent-color:var(--accent);cursor:pointer;"
-            oninput="document.getElementById('clusterMinVal').textContent=this.value; recomputeClusters();"/>
+            oninput="document.getElementById('clusterMinVal').textContent=this.value; recomputeClustersDebounced();"/>
           <span id="clusterMinVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:20px;">3</span>
         </div>
       </div>
@@ -969,23 +969,52 @@ let apiKey = '';
 const EMAIL_SCRAPER_URL = 'https://plonpol.pl/email-scraper.php';
 let map = null;
 let markers = [];
+let markerByIdx = new Map();      // indeks lokalu w results → marker (markers[i] się rozjeżdżało
+                                  // gdy lokal nie miał współrzędnych i był pomijany)
 let placesService = null;
+let geocoderInstance = null;      // jedna instancja zamiast tworzenia nowej per lokal
 let results = [];
 let activeChip = 'cafe';
-let highlightedRow = null;
 let searchAborted = false;
 
 // ── STAN SKUPISK ──
-let activeView = 'list';          // 'list' | 'cluster'
-let clusterOverlays = [];         // google.maps.Circle + etykiety
+let activeView = 'list';          // 'list' | 'cluster' | 'heatmap'
+let clusterOverlays = [];         // wszystko co trzeba zdjąć z mapy (koła, etykiety, szare kropki)
+let clusterCircles = [];          // same koła, indeksowane równolegle do clusterData
+let clusterInfoWindows = [];      // InfoWindow trzeba zamykać ręcznie — setMap(null) ich nie usuwa
 let clusterData = [];             // obliczone skupiska
 let selectedClusterIdx = null;    // indeks klikniętego skupiska
-let heatmapLayer = null;           // google.maps.visualization.HeatmapLayer
+let heatmapLayer = null;          // google.maps.visualization.HeatmapLayer
+let clusterDebounceTimer = null;
+
+// ── WSPÓLNE HELPERY ──
+// Wynik = ocena × log10(opinie+1). Był powielony w 7 miejscach.
+function scoreOf(p) {
+  return (p.rating || 0) * Math.log10((p.reviews || 0) + 1);
+}
+
+// Uruchamia zadania równolegle z ograniczeniem współbieżności.
+// Zachowuje kolejność wyników i reaguje na przycisk Stop.
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length || searchAborted) return;
+      try { out[i] = await fn(items[i], i); }
+      catch { out[i] = null; }
+    }
+  }));
+  return out;
+}
 
 function stopSearch() {
   searchAborted = true;
   document.getElementById('stopBtn').style.display = 'none';
   document.getElementById('searchBtn').disabled = false;
+  document.getElementById('debugBar').style.display = 'none';
 }
 
 // ══════════════════════════════════════════
@@ -1023,9 +1052,22 @@ function switchView(view) {
     clusterParams.classList.remove('visible');
     clusterLegend.classList.remove('visible');
     if (results.length) {
-      showHeatmap(results);
+      // renderResults NAJPIERW — inaczej nadpisywał nagłówek ustawiony przez showHeatmap
       renderResults(results);
+      showHeatmap(results);
     }
+  }
+}
+
+// Odświeża tabelę zgodnie z aktywnym widokiem (używane po doczytaniu emaili —
+// wcześniej scrapeEmails zawsze wołało renderResults i kasowało widok skupisk)
+function refreshCurrentView() {
+  if (!results.length) return;
+  if (activeView === 'cluster') {
+    const sel = (selectedClusterIdx !== null) ? clusterData[selectedClusterIdx] : null;
+    renderClusterTable(sel ? sel.members : results, sel ? selectedClusterIdx : null);
+  } else {
+    renderResults(results);
   }
 }
 
@@ -1039,13 +1081,15 @@ function clearHeatmap() {
 
 function showHeatmap(places) {
   if (!map || !window.google?.maps?.visualization) return;
+  clearHeatmap();   // bez tego kolejne wyszukiwanie nakładało warstwy jedna na drugą
 
   const weightedPoints = places
     .filter(p => p.lat && p.lng)
     .map(p => ({
       location: new google.maps.LatLng(p.lat, p.lng),
-      weight: Math.max(0.2, (p.rating - 3) / 2 * Math.log10(p.reviews + 1)),
+      weight: Math.max(0.2, ((p.rating || 0) - 3) / 2 * Math.log10((p.reviews || 0) + 1)),
     }));
+  if (!weightedPoints.length) return;
 
   heatmapLayer = new google.maps.visualization.HeatmapLayer({
     data: weightedPoints,
@@ -1086,45 +1130,79 @@ function haversineMeters(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
+// Wersja v1 była O(n³): pętla zachłanna × pełny skan × filtr po wszystkich punktach.
+// Przy 500 wynikach to ~125 mln wywołań haversine i kilkusekundowe zawieszenie karty.
+// Teraz sąsiedztwa liczymy raz przez siatkę przestrzenną (komórka = promień, więc
+// każdy sąsiad leży w oknie 3×3), a po wycięciu skupiska aktualizujemy tylko
+// liczniki punktów, których to faktycznie dotyczy. Semantyka zachłanna bez zmian.
 function computeClusters(places, radiusMeters, minCount) {
-  const remaining = places.map((p, i) => ({ ...p, _idx: i })).filter(p => p.lat && p.lng);
-  const clusters = [];
+  const pts = places.filter(p => p.lat && p.lng).map((p, i) => (p._idx != null ? p : { ...p, _idx: i }));
+  const n = pts.length;
+  if (!n) return [];
 
-  while (remaining.length > 0) {
-    // Znajdź punkt z największą liczbą sąsiadów w promieniu
-    let bestI = 0;
-    let bestNeighbors = [];
+  // Skala metry↔stopnie wokół środka zbioru (obszar miasta — błąd pomijalny)
+  const lat0 = pts.reduce((s, p) => s + p.lat, 0) / n;
+  const mPerLat = 111320;
+  const mPerLng = 111320 * Math.cos(lat0 * Math.PI / 180) || 1;
 
-    for (let i = 0; i < remaining.length; i++) {
-      const neighbors = remaining.filter(q =>
-        haversineMeters(remaining[i].lat, remaining[i].lng, q.lat, q.lng) <= radiusMeters
-      );
-      if (neighbors.length > bestNeighbors.length) {
-        bestNeighbors = neighbors;
-        bestI = i;
+  const buckets = new Map();
+  const gx = new Int32Array(n);
+  const gy = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    gx[i] = Math.floor(pts[i].lng * mPerLng / radiusMeters);
+    gy[i] = Math.floor(pts[i].lat * mPerLat / radiusMeters);
+    const key = gx[i] + ',' + gy[i];
+    const arr = buckets.get(key);
+    if (arr) arr.push(i); else buckets.set(key, [i]);
+  }
+
+  // Lista sąsiadów każdego punktu (zawiera sam punkt — jak w v1)
+  const nbrs = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const out = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const arr = buckets.get((gx[i] + dx) + ',' + (gy[i] + dy));
+        if (!arr) continue;
+        for (const j of arr) {
+          if (haversineMeters(pts[i].lat, pts[i].lng, pts[j].lat, pts[j].lng) <= radiusMeters) out.push(j);
+        }
       }
     }
+    nbrs[i] = out;
+  }
 
-    const center = remaining[bestI];
-    const membersInRadius = bestNeighbors;
+  const alive = new Uint8Array(n).fill(1);
+  const counts = new Int32Array(n);
+  for (let i = 0; i < n; i++) counts[i] = nbrs[i].length;
 
-    // Usuń wszystkich członków skupiska z puli
-    const memberIdxs = new Set(membersInRadius.map(p => p._idx));
-    for (let i = remaining.length - 1; i >= 0; i--) {
-      if (memberIdxs.has(remaining[i]._idx)) remaining.splice(i, 1);
+  const clusters = [];
+  let left = n;
+
+  while (left > 0) {
+    let bestI = -1, bestC = -1;
+    for (let i = 0; i < n; i++) {
+      if (alive[i] && counts[i] > bestC) { bestC = counts[i]; bestI = i; }
+    }
+    if (bestI < 0) break;
+
+    const members = nbrs[bestI].filter(j => alive[j]);
+    for (const j of members) { alive[j] = 0; left--; }
+    // Punkty, które straciły sąsiadów — tylko one, zamiast pełnego przeliczenia
+    for (const j of members) {
+      for (const k of nbrs[j]) if (alive[k]) counts[k]--;
     }
 
-    if (membersInRadius.length >= minCount) {
-      // Oblicz centroid skupiska
-      const cLat = membersInRadius.reduce((s, p) => s + p.lat, 0) / membersInRadius.length;
-      const cLng = membersInRadius.reduce((s, p) => s + p.lng, 0) / membersInRadius.length;
-      const avgRating = (membersInRadius.reduce((s, p) => s + p.rating, 0) / membersInRadius.length).toFixed(1);
-
+    if (members.length >= minCount) {
+      const mem = members.map(j => pts[j]);
       clusters.push({
-        center: { lat: cLat, lng: cLng },
-        members: membersInRadius,
-        count: membersInRadius.length,
-        avgRating,
+        center: {
+          lat: mem.reduce((s, p) => s + p.lat, 0) / mem.length,
+          lng: mem.reduce((s, p) => s + p.lng, 0) / mem.length,
+        },
+        members: mem,
+        count: mem.length,
+        avgRating: (mem.reduce((s, p) => s + (p.rating || 0), 0) / mem.length).toFixed(1),
         radius: radiusMeters,
       });
     }
@@ -1142,7 +1220,19 @@ function clusterColor(count) {
 
 function clearClusterOverlays() {
   clusterOverlays.forEach(o => o.setMap(null));
+  // InfoWindow nie ma setMap() — bez close() zostawały na mapie na zawsze.
+  // Przy suwaku promienia (oninput) tworzyły się dziesiątkami na każde przeciągnięcie.
+  clusterInfoWindows.forEach(iw => iw.close());
   clusterOverlays = [];
+  clusterCircles = [];
+  clusterInfoWindows = [];
+}
+
+// Suwaki wołały recomputeClusters() na każde drgnięcie — pełna klasteryzacja
+// plus setki nowych obiektów Google Maps kilkadziesiąt razy na sekundę.
+function recomputeClustersDebounced() {
+  clearTimeout(clusterDebounceTimer);
+  clusterDebounceTimer = setTimeout(recomputeClusters, 130);
 }
 
 function recomputeClusters() {
@@ -1184,6 +1274,8 @@ function recomputeClusters() {
 
     circle.addListener('click', () => selectCluster(idx));
     clusterOverlays.push(circle);
+    clusterCircles[idx] = circle;   // wcześniej sięgano po clusterOverlays[idx*2] — łamało się
+                                    // przy każdej zmianie kolejności push()
 
     // Marker-etykieta w centrum skupiska
     const labelMarker = new google.maps.Marker({
@@ -1208,6 +1300,7 @@ function recomputeClusters() {
       disableAutoPan: true,
     });
     iw.open(map, labelMarker);
+    clusterInfoWindows.push(iw);
 
     labelMarker.addListener('click', () => selectCluster(idx));
     clusterOverlays.push(labelMarker);
@@ -1246,20 +1339,20 @@ function recomputeClusters() {
 }
 
 function selectCluster(idx) {
-  selectedClusterIdx = idx;
   const cl = clusterData[idx];
+  if (!cl) return;
+  selectedClusterIdx = idx;
 
   // Podświetl wybrany okrąg
-  clusterData.forEach((_, i) => {
-    const circleObj = clusterOverlays[i * 2];
-    if (circleObj && circleObj.setOptions) {
-      const colors = clusterColor(clusterData[i].count);
-      circleObj.setOptions({
-        fillOpacity: (i === idx) ? Math.min(colors.fillOpacity * 3, 0.4) : colors.fillOpacity,
-        strokeOpacity: (i === idx) ? Math.min(colors.strokeOpacity * 1.3, 1) : colors.strokeOpacity,
-        strokeWeight: (i === idx) ? 2.5 : 1.5,
-      });
-    }
+  clusterData.forEach((c, i) => {
+    const circleObj = clusterCircles[i];
+    if (!circleObj) return;
+    const colors = clusterColor(c.count);
+    circleObj.setOptions({
+      fillOpacity: (i === idx) ? Math.min(colors.fillOpacity * 3, 0.4) : colors.fillOpacity,
+      strokeOpacity: (i === idx) ? Math.min(colors.strokeOpacity * 1.3, 1) : colors.strokeOpacity,
+      strokeWeight: (i === idx) ? 2.5 : 1.5,
+    });
   });
 
   map.panTo(cl.center);
@@ -1282,134 +1375,168 @@ function clearClusterSelection() {
 
   // Zresetuj opacity kółek
   clusterData.forEach((cl, i) => {
-    const circleObj = clusterOverlays[i * 2];
-    if (circleObj && circleObj.setOptions) {
-      const colors = clusterColor(cl.count);
-      circleObj.setOptions({ fillOpacity: colors.fillOpacity, strokeOpacity: colors.strokeOpacity, strokeWeight: 1.5 });
-    }
+    const circleObj = clusterCircles[i];
+    if (!circleObj) return;
+    const colors = clusterColor(cl.count);
+    circleObj.setOptions({ fillOpacity: colors.fillOpacity, strokeOpacity: colors.strokeOpacity, strokeWeight: 1.5 });
   });
 
   renderClusterTable(results, null);
 }
 
-function renderClusterTable(data, clusterIdx) {
+// ══════════════════════════════════════════
+// ── WSPÓLNY RENDERER TABELI ──
+// renderResults i renderClusterTable były niemal identyczne (~90 linii duplikatu).
+// mode 'full'    = widok listy (dodatkowo Kraj i Miasto)
+// mode 'compact' = widok skupisk
+// ══════════════════════════════════════════
+function buildTableHtml(data, { mode = 'full', badgeFor = null, rowClick } = {}) {
   const isCompanyMode = (activeChip === 'company');
-  const label = clusterIdx !== null
-    ? `Skupisko #${clusterIdx + 1}`
-    : `Wszystkie lokale (${data.length})`;
+  const full = (mode === 'full');
 
-  if (!data.length) {
-    document.getElementById('tableContainer').innerHTML =
-      `<div class="empty-state"><div class="empty-icon">🔍</div><div>Brak lokali w skupiskach dla podanych parametrów</div></div>`;
-    return;
-  }
+  const head =
+    '<th>#</th><th>Nazwa</th>' +
+    (isCompanyMode ? '<th>Branża</th>' : '') +
+    '<th>Ocena</th>' +
+    (full ? '<th>Liczba opinii</th>' : '<th>Opinii</th>') +
+    '<th>Wynik</th>' +
+    (full ? '<th>Kraj</th><th>Miasto</th>' : '') +
+    '<th>Dzielnica</th><th>Ulica</th><th>Telefon</th><th>E-mail</th><th>Strona WWW</th>';
 
-  const rows = data.map((p, i) => {
-    const score = (p.rating * Math.log10(p.reviews + 1)).toFixed(1);
-    // Znajdź do którego skupiska należy ten lokal
-    let clusterBadge = '';
-    if (clusterIdx === null) {
-      const ci = clusterData.findIndex(cl => cl.members.some(m => m._idx === p._idx || m === p));
-      if (ci >= 0) {
-        const colors = clusterColor(clusterData[ci].count);
-        const col = colors.strokeColor;
-        clusterBadge = `<span style="display:inline-block;padding:1px 7px;border-radius:999px;font-size:0.68rem;font-weight:600;background:${col};color:#fff;margin-left:4px;">S${ci+1}</span>`;
-      }
-    }
-    return `
-    <tr onclick="focusMarkerOnCluster(${p.lat},${p.lng})">
-      <td class="rank-cell">#${i+1}${clusterBadge}</td>
+  const rows = data.map((p, i) => `
+    <tr onclick="${rowClick(p, i)}">
+      <td class="rank-cell">#${i + 1}${badgeFor ? badgeFor(p) : ''}</td>
       <td class="name-cell" title="${escAttr(p.name)}">${esc(p.name)}</td>
       ${isCompanyMode ? `<td>${esc(p.industry || '—')}</td>` : ''}
-      <td><span class="rating-badge"><span class="star">★</span>${p.rating.toFixed(1)}</span></td>
-      <td class="reviews-count">${p.reviews.toLocaleString('pl')}</td>
-      <td><strong>${score}</strong></td>
+      <td><span class="rating-badge"><span class="star">★</span>${(p.rating || 0).toFixed(1)}</span></td>
+      <td class="reviews-count">${(p.reviews || 0).toLocaleString('pl')}</td>
+      <td><strong>${scoreOf(p).toFixed(1)}</strong></td>
+      ${full ? `<td>${esc(p.country)}</td><td>${esc(p.city)}</td>` : ''}
       <td>${esc(p.district)}</td>
       <td title="${escAttr(p.street)}">${esc(p.street)}</td>
       <td>${esc(p.phone)}</td>
       <td class="link-cell">${p.email ? `<a href="mailto:${escAttr(p.email)}">${esc(p.email)}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td class="link-cell">${p.website && /^https?:\/\//i.test(p.website) ? `<a href="${escAttr(p.website)}" target="_blank" rel="noopener noreferrer">↗ www</a>` : '—'}</td>
-    </tr>`;
-  }).join('');
+    </tr>`).join('');
 
-  document.getElementById('tableContainer').innerHTML = `
-    <table>
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Nazwa</th>
-          ${isCompanyMode ? '<th>Branża</th>' : ''}
-          <th>Ocena</th>
-          <th>Opinii</th>
-          <th>Wynik</th>
-          <th>Dzielnica</th>
-          <th>Ulica</th>
-          <th>Telefon</th>
-          <th>E-mail</th>
-          <th>Strona WWW</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+  return `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function focusMarkerOnCluster(lat, lng) {
+function emptyState(msg) {
+  return `<div class="empty-state"><div class="empty-icon">🔍</div><div>${esc(msg)}</div></div>`;
+}
+
+function renderClusterTable(data, clusterIdx) {
+  if (!data.length) {
+    document.getElementById('tableContainer').innerHTML =
+      emptyState('Brak lokali w skupiskach dla podanych parametrów');
+    return;
+  }
+
+  // Przypisanie lokal → numer skupiska liczone RAZ.
+  // Wcześniej każdy wiersz robił findIndex + some po wszystkich skupiskach — O(n²).
+  let badgeFor = null;
+  if (clusterIdx === null && clusterData.length) {
+    const clusterOfPlace = new Map();
+    clusterData.forEach((cl, ci) => cl.members.forEach(m => {
+      if (!clusterOfPlace.has(m)) clusterOfPlace.set(m, ci);
+    }));
+    badgeFor = (p) => {
+      const ci = clusterOfPlace.get(p);
+      if (ci === undefined) return '';
+      const col = clusterColor(clusterData[ci].count).strokeColor;
+      return `<span style="display:inline-block;padding:1px 7px;border-radius:999px;font-size:0.68rem;font-weight:600;background:${col};color:#fff;margin-left:4px;">S${ci + 1}</span>`;
+    };
+  }
+
+  document.getElementById('tableContainer').innerHTML = buildTableHtml(data, {
+    mode: 'compact',
+    badgeFor,
+    rowClick: (p) => `focusOnMap(${Number(p.lat) || 0},${Number(p.lng) || 0})`,
+  });
+}
+
+function focusOnMap(lat, lng) {
   if (!map || !lat) return;
   map.panTo({ lat, lng });
   map.setZoom(17);
+}
+
+// ══════════════════════════════════════════
+// ── WSPÓLNY BUDOWNICZY ARKUSZA EXCEL ──
+// exportExcel i exportCluster budowały nagłówki, szerokości i wiersze osobno;
+// w exportCluster szerokości kolumn rozjeżdżały się w trybie Firmy (brak kolumny Branża).
+// ══════════════════════════════════════════
+function buildSheet(list, mode = 'full') {
+  const isCompanyMode = (activeChip === 'company');
+  const full = (mode === 'full');
+
+  const headers = [
+    '#', 'Nazwa',
+    ...(isCompanyMode ? ['Branża'] : []),
+    'Ocena Google', 'Liczba opinii', 'Wynik',
+    ...(full ? ['Kraj', 'Miasto'] : []),
+    'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW',
+    ...(full ? ['Google Maps'] : []),
+  ];
+  const cols = [
+    { wch: 5 }, { wch: 35 },
+    ...(isCompanyMode ? [{ wch: 22 }] : []),
+    { wch: 12 }, { wch: 14 }, { wch: 8 },
+    ...(full ? [{ wch: 12 }, { wch: 16 }] : []),
+    { wch: 20 }, { wch: 28 }, { wch: 18 }, { wch: 25 }, { wch: 32 },
+    ...(full ? [{ wch: 40 }] : []),
+  ];
+  const rows = list.map((p, i) => [
+    i + 1, p.name,
+    ...(isCompanyMode ? [p.industry || ''] : []),
+    p.rating, p.reviews, parseFloat(scoreOf(p).toFixed(1)),
+    ...(full ? [p.country, p.city] : []),
+    p.district, p.street, p.phone, p.email || '', p.website || '',
+    ...(full ? [p.googleUrl || ''] : []),
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws['!cols'] = cols;
+  return ws;
+}
+
+// Nazwa miasta trafiała wprost do nazwy pliku — usuwamy znaki niedozwolone w systemie plików
+function safeFileName(s) {
+  return ((s || '').replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '').toLowerCase()) || 'wyniki';
 }
 
 function exportCluster() {
   if (selectedClusterIdx === null || !clusterData[selectedClusterIdx]) return;
   const cl = clusterData[selectedClusterIdx];
   const city = document.getElementById('cityInput').value;
-  const isCompanyMode = (activeChip === 'company');
-
-  const headers = isCompanyMode
-    ? ['#', 'Nazwa', 'Branża', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW']
-    : ['#', 'Nazwa', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW'];
-
-  const wsData = [
-    headers,
-    ...cl.members.map((p, i) => [
-      i + 1, p.name,
-      ...(isCompanyMode ? [p.industry || ''] : []),
-      p.rating, p.reviews,
-      parseFloat((p.rating * Math.log10(p.reviews + 1)).toFixed(1)),
-      p.district, p.street, p.phone, p.email || '', p.website || ''
-    ])
-  ];
-
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
-  ws['!cols'] = [{wch:5},{wch:35},{wch:12},{wch:14},{wch:8},{wch:20},{wch:28},{wch:18},{wch:25},{wch:32}];
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, `Skupisko ${selectedClusterIdx + 1}`);
+  XLSX.utils.book_append_sheet(wb, buildSheet(cl.members, 'compact'), `Skupisko ${selectedClusterIdx + 1}`);
 
-  const metaData = [
+  const wsMeta = XLSX.utils.aoa_to_sheet([
     ['Skupisko', `#${selectedClusterIdx + 1}`],
     ['Liczba lokali', cl.count],
     ['Promień skupiska', cl.radius + 'm'],
     ['Śr. ocena', cl.avgRating],
     ['Lokalizacja', city],
     ['Data', new Date().toLocaleDateString('pl-PL')],
-  ];
-  const wsMeta = XLSX.utils.aoa_to_sheet(metaData);
+  ]);
+  wsMeta['!cols'] = [{ wch: 28 }, { wch: 40 }];
   XLSX.utils.book_append_sheet(wb, wsMeta, 'Info');
 
-  const fileName = `skupisko_${selectedClusterIdx + 1}_${city.replace(/\s+/g,'_').toLowerCase()}_${new Date().toISOString().slice(0,10)}.xlsx`;
-  XLSX.writeFile(wb, fileName);
+  XLSX.writeFile(wb, `skupisko_${selectedClusterIdx + 1}_${safeFileName(city)}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 // ── SECURITY: HTML escape ──
+// Jedna implementacja zamiast dwóch. Stara esc() tworzyła element DOM na każde
+// wywołanie (~13 na wiersz × 500 wierszy) i nie escapowała cudzysłowów, więc
+// pomyłkowe użycie jej w atrybucie było luką. Teraz obie nazwy escapują komplet.
+const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 function esc(str) {
-  const div = document.createElement('div');
-  div.appendChild(document.createTextNode(str || ''));
-  return div.innerHTML;
+  return String(str ?? '').replace(/[&<>"']/g, ch => ESC_MAP[ch]);
 }
-function escAttr(str) {
-  return (str || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
+const escAttr = esc;
 
 // ── CHIP LOGIC ──
 document.querySelectorAll('.chip').forEach(chip => {
@@ -1499,7 +1626,11 @@ async function doSearch(city) {
   document.getElementById('exportBtn').disabled = true;
   searchAborted = false;
   results = [];
+  clusterData = [];
+  selectedClusterIdx = null;
   clearMarkers();
+  clearClusterOverlays();   // poprzednie wyszukiwanie zostawiało koła i InfoWindow na mapie
+  clearHeatmap();
   const isMobile = window.innerWidth <= 700;
 
   function dbg(msg) {
@@ -1554,10 +1685,6 @@ async function doSearch(city) {
 
     // Wyciągnij nazwę miasta i dzielnicy z geocodera
     const geoComponents = geoResults[0].address_components || [];
-    const districtTypes = [
-      'sublocality_level_1','sublocality_level_2','sublocality',
-      'neighborhood','administrative_area_level_3','administrative_area_level_4'
-    ];
 
     // Miasto
     let geoCity = '';
@@ -1579,7 +1706,7 @@ async function doSearch(city) {
     // Dzielnica
     let geoDistrict = '';
     for (const comp of geoComponents) {
-      if (comp.types.some(t => districtTypes.includes(t))) {
+      if (comp.types.some(t => DISTRICT_TYPES.includes(t))) {
         geoDistrict = comp.long_name;
         break;
       }
@@ -1600,42 +1727,43 @@ async function doSearch(city) {
       const places = await searchPlaces(location, count, geoBounds, dbg);
       if (searchAborted) { dbg('Przerwano.'); document.getElementById('stopBtn').style.display = 'none'; document.getElementById('searchBtn').disabled = false; return; }
       dbg('KROK 6: Znaleziono ' + places.length + ' miejsc');
-      const detailed = [];
-      for (let i = 0; i < places.length; i++) {
-        if (searchAborted) break;
-        dbg(`Pobieranie szczegółów (${i+1}/${places.length})...`);
-        const detail = await getPlaceDetails(places[i].place_id);
+
+      // Szczegóły pobierane równolegle (limit 6) zamiast jeden po drugim z sleep(50).
+      // Dla 300 lokali to spadek z ~4 minut do kilkunastu sekund.
+      let done = 0;
+      const fetched = await mapLimit(places, 6, async (pl) => {
+        const detail = await getPlaceDetails(pl.place_id);
+        done++;
+        if (done % 5 === 0 || done === places.length) {
+          dbg(`Pobieranie szczegółów (${done}/${places.length})...`);
+        }
         if (detail && !detail.district && detail.lat && detail.lng) {
           detail.district = await reverseGeocodeDistrict(detail.lat, detail.lng, detail.city);
         }
-        if (detail && passesQualityFilter(detail)) {
-          // Filtr miasta: odrzuć lokale z innego miasta
-          if (geoCity) {
-            const detailCity = (detail.city || '').toLowerCase().trim();
-            const targetCity = geoCity.toLowerCase().trim();
-            if (detailCity && detailCity !== targetCity) {
-              continue; // inne miasto — pomiń
-            }
-          }
-          // Filtr dzielnicy: odrzuć tylko jeśli lokal MA rozpoznaną dzielnicę
-          // i jest ona INNA niż szukana. Jeśli brak dzielnicy — akceptuj
-          let matchesDistrict = true;
-          if (geoDistrict) {
-            const detailDistrict = (detail.district || '').toLowerCase().trim();
-            const targetDistrict = geoDistrict.toLowerCase().trim();
-            if (detailDistrict && !detailDistrict.includes(targetDistrict) && !targetDistrict.includes(detailDistrict)) {
-              matchesDistrict = false;
-            }
-          }
-          if (matchesDistrict) detailed.push(detail);
-        }
-        await sleep(50);
-      }
-      detailed.sort((a, b) => {
-        const scoreA = (a.rating || 0) * Math.log10((a.reviews || 0) + 1);
-        const scoreB = (b.rating || 0) * Math.log10((b.reviews || 0) + 1);
-        return scoreB - scoreA;
+        return detail;
       });
+
+      const targetCity = (geoCity || '').toLowerCase().trim();
+      const targetDistrict = (geoDistrict || '').toLowerCase().trim();
+      const detailed = fetched.filter(detail => {
+        if (!detail || !passesQualityFilter(detail)) return false;
+        // Filtr miasta: odrzuć lokale z innego miasta
+        if (targetCity) {
+          const detailCity = (detail.city || '').toLowerCase().trim();
+          if (detailCity && detailCity !== targetCity) return false;
+        }
+        // Filtr dzielnicy: odrzuć tylko jeśli lokal MA rozpoznaną dzielnicę
+        // i jest ona INNA niż szukana. Jeśli brak dzielnicy — akceptuj
+        if (targetDistrict) {
+          const detailDistrict = (detail.district || '').toLowerCase().trim();
+          if (detailDistrict && !detailDistrict.includes(targetDistrict) && !targetDistrict.includes(detailDistrict)) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      detailed.sort((a, b) => scoreOf(b) - scoreOf(a));
       results = detailed.slice(0, count).map((p, i) => ({ ...p, _idx: i }));
       renderResults(results);
       if (!isMobile) {
@@ -1829,100 +1957,130 @@ async function searchPlaces(location, totalNeeded, geoBounds, dbg) {
   }
 
   const seenIds = new Set();
-  let allPlaces = [];
+  const allPlaces = [];
 
   // Dla trybu company: mniej punktów siatki, więcej keywordów
   // Dla gastro: pełna siatka, jeden keyword
   const isCompany = (keywords.length > 1);
   const pointsToUse = isCompany ? searchPoints.slice(0, Math.min(searchPoints.length, 4)) : searchPoints;
-  const totalSteps = pointsToUse.length * keywords.length;
-  let step = 0;
 
-  for (const kw of keywords) {
-    if (searchAborted) break;
-    for (const point of pointsToUse) {
-      if (searchAborted) break;
-      step++;
-      if (dbg) dbg(`Skanowanie (${step}/${totalSteps}): "${kw}"... znaleziono ${allPlaces.length}`);
-      try {
-        const pagePlaces = await new Promise((res, rej) => {
-          placesService.nearbySearch({
-            location: point,
-            rankBy: google.maps.places.RankBy.DISTANCE,
-            type,
-            keyword: kw,
-          }, (results, status) => {
-            if (status === google.maps.places.PlacesServiceStatus.OK && results) {
-              res(results);
-            } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-              res([]);
-            } else {
-              rej(new Error('Places API error: ' + status));
-            }
-          });
-        });
+  // Wszystkie kombinacje keyword × punkt jako płaska lista zadań.
+  // Wcześniej leciały sekwencyjnie — tryb Firmy to 16 keywordów × 4 punkty = 64
+  // żądania jedno po drugim (~30 s). Teraz 4 równolegle.
+  const tasks = [];
+  for (const kw of keywords) for (const point of pointsToUse) tasks.push({ kw, point });
 
-        for (const p of pagePlaces) {
-          if (!isBlacklisted(p) && !seenIds.has(p.place_id)) {
-            seenIds.add(p.place_id);
-            allPlaces.push(p);
-          }
+  let done = 0;
+  await mapLimit(tasks, 4, async ({ kw, point }) => {
+    try {
+      const pagePlaces = await nearbySearchOnce(point, type, kw);
+      // JS jest jednowątkowy, więc dedup w Set jest tu bezpieczny
+      for (const p of pagePlaces) {
+        if (!isBlacklisted(p) && !seenIds.has(p.place_id)) {
+          seenIds.add(p.place_id);
+          allPlaces.push(p);
         }
-      } catch (e) {
-        console.warn(`[GastroFinder] Błąd:`, e.message);
       }
+    } catch (e) {
+      console.warn('[GastroFinder] Błąd wyszukiwania:', e.message);
     }
-  }
+    done++;
+    if (dbg) dbg(`Skanowanie (${done}/${tasks.length}): "${kw}"... znaleziono ${allPlaces.length}`);
+  });
 
   return allPlaces;
 }
 
+// Pojedyncze nearbySearch z ponowieniem przy OVER_QUERY_LIMIT (przy równoległych
+// żądaniach Google potrafi chwilowo odbić — bez retry gubiliśmy całe punkty siatki)
+function nearbySearchOnce(point, type, keyword, attempt = 0) {
+  return new Promise((resolve, reject) => {
+    placesService.nearbySearch({
+      location: point,
+      rankBy: google.maps.places.RankBy.DISTANCE,
+      type,
+      keyword,
+    }, async (res, status) => {
+      const S = google.maps.places.PlacesServiceStatus;
+      if (status === S.OK && res) return resolve(res);
+      if (status === S.ZERO_RESULTS) return resolve([]);
+      if (status === S.OVER_QUERY_LIMIT && attempt < 3 && !searchAborted) {
+        await sleep(400 * (attempt + 1));
+        try { return resolve(await nearbySearchOnce(point, type, keyword, attempt + 1)); }
+        catch (e) { return reject(e); }
+      }
+      reject(new Error('Places API error: ' + status));
+    });
+  });
+}
+
+// ── Typy komponentów adresu oznaczające dzielnicę, w kolejności priorytetu.
+// Ta sama lista była powielona w trzech miejscach, w dwóch wariantach kolejności. ──
+const DISTRICT_TYPES = [
+  'sublocality_level_1','sublocality_level_2','sublocality',
+  'neighborhood','administrative_area_level_3','administrative_area_level_4'
+];
+
+function getGeocoder() {
+  if (!geocoderInstance) geocoderInstance = new google.maps.Geocoder();
+  return geocoderInstance;
+}
+
 // ── REVERSE GEOCODING: fallback dla brakującej dzielnicy ──
+// Każde wywołanie to osobne, płatne zapytanie do Geocoding API — a lokale w tej
+// samej okolicy zwracają tę samą dzielnicę. Cache po współrzędnych zaokrąglonych
+// do ~110 m potrafi zredukować liczbę zapytań kilkukrotnie.
+const districtCache = new Map();
+
 function reverseGeocodeDistrict(lat, lng, cityName) {
-  return new Promise((resolve) => {
-    const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+  const key = lat.toFixed(3) + ',' + lng.toFixed(3);
+  if (districtCache.has(key)) return districtCache.get(key);
+
+  const promise = new Promise((resolve) => {
+    getGeocoder().geocode({ location: { lat, lng } }, (results, status) => {
       if (status !== 'OK' || !results) { resolve(''); return; }
 
-      const districtTypes = [
-        'sublocality_level_1','sublocality_level_2','sublocality',
-        'neighborhood','administrative_area_level_4','administrative_area_level_3'
-      ];
-
-      // Przeszukujemy wszystkie wyniki i wszystkie komponenty
-      for (const result of results) {
-        for (const comp of (result.address_components || [])) {
-          for (const dtype of districtTypes) {
-            if (comp.types.includes(dtype)) {
-              const val = comp.long_name;
-              // Pomijamy jeśli wartość jest taka sama jak miasto
-              if (val && val.toLowerCase() !== (cityName || '').toLowerCase()) {
-                resolve(val);
-                return;
-              }
-            }
+      const city = (cityName || '').toLowerCase();
+      // Przeszukujemy w kolejności priorytetu typu, nie kolejności wyników —
+      // inaczej przypadkowy 'neighborhood' wygrywał z właściwą dzielnicą
+      for (const dtype of DISTRICT_TYPES) {
+        for (const result of results) {
+          for (const comp of (result.address_components || [])) {
+            if (!comp.types.includes(dtype)) continue;
+            const val = comp.long_name;
+            // Pomijamy jeśli wartość jest taka sama jak miasto
+            if (val && val.toLowerCase() !== city) { resolve(val); return; }
           }
         }
       }
       resolve('');
     });
   });
+
+  districtCache.set(key, promise);   // cache'ujemy obietnicę — równoległe zapytania
+                                     // o ten sam punkt nie odpalą drugiego wywołania
+  return promise;
 }
 
-function getPlaceDetails(placeId) {
+const PLACE_DETAIL_FIELDS = [
+  'place_id','name','rating','user_ratings_total',
+  'formatted_address','address_components',
+  'formatted_phone_number','website','url','geometry',
+  'business_status','types'
+];
+
+function getPlaceDetails(placeId, attempt = 0) {
   return new Promise((resolve) => {
-    const fields = [
-      'place_id','name','rating','user_ratings_total',
-      'formatted_address','address_components',
-      'formatted_phone_number','website','url','geometry',
-      'business_status','types'
-    ];
-    placesService.getDetails({ placeId, fields }, (place, status) => {
-      if (status === google.maps.places.PlacesServiceStatus.OK && place) {
-        resolve(parsePlace(place));
-      } else {
-        resolve(null);
+    placesService.getDetails({ placeId, fields: PLACE_DETAIL_FIELDS }, async (place, status) => {
+      const S = google.maps.places.PlacesServiceStatus;
+      if (status === S.OK && place) return resolve(parsePlace(place));
+      // Przy równoległych żądaniach Google chwilowo dławi ruch — ponawiamy,
+      // zamiast po cichu gubić lokal
+      if (status === S.OVER_QUERY_LIMIT && attempt < 3 && !searchAborted) {
+        await sleep(400 * (attempt + 1));
+        return resolve(await getPlaceDetails(placeId, attempt + 1));
       }
+      resolve(null);
     });
   });
 }
@@ -1935,14 +2093,11 @@ function parsePlace(p) {
   };
   const country   = get(['country']);
   const city      = get(['locality']) || get(['administrative_area_level_2']) || get(['administrative_area_level_1']);
-  const district  =
-    get(['sublocality_level_1']) ||
-    get(['sublocality_level_2']) ||
-    get(['sublocality']) ||
-    get(['neighborhood']) ||
-    get(['administrative_area_level_3']) ||
-    get(['administrative_area_level_4']) ||
-    '';
+  let district = '';
+  for (const t of DISTRICT_TYPES) {
+    district = get([t]);
+    if (district) break;
+  }
   const street    = get(['route']);
   const streetNo  = get(['street_number']);
   const streetFull = street ? (streetNo ? `${street} ${streetNo}` : street) : '';
@@ -2057,6 +2212,8 @@ function addMarkers(places) {
     });
 
     markers.push(marker);
+    markerByIdx.set(i, marker);   // focusMarker(i) sięgało po markers[i], a ten indeks
+                                  // przesuwał się przy każdym lokalu bez współrzędnych
   });
 
   // Auto-zoom mapy do wszystkich markerów
@@ -2070,6 +2227,7 @@ function addMarkers(places) {
 function clearMarkers() {
   markers.forEach(m => m.setMap(null));
   markers = [];
+  markerByIdx.clear();
 }
 
 function highlightRow(idx) {
@@ -2090,61 +2248,22 @@ function renderResults(data) {
 
   if (!data.length) {
     document.getElementById('tableContainer').innerHTML =
-      `<div class="empty-state"><div class="empty-icon">🔍</div><div>Brak wyników dla podanych kryteriów</div></div>`;
+      emptyState('Brak wyników dla podanych kryteriów');
     return;
   }
 
-  const isCompanyMode = (activeChip === 'company');
-
-  const rows = data.map((p, i) => {
-    const score = (p.rating * Math.log10(p.reviews + 1)).toFixed(1);
-    return `
-    <tr onclick="focusMarker(${i})">
-      <td class="rank-cell">#${i+1}</td>
-      <td class="name-cell" title="${escAttr(p.name)}">${esc(p.name)}</td>
-      ${isCompanyMode ? `<td>${esc(p.industry || '—')}</td>` : ''}
-      <td><span class="rating-badge"><span class="star">★</span>${p.rating.toFixed(1)}</span></td>
-      <td class="reviews-count">${p.reviews.toLocaleString('pl')}</td>
-      <td><strong>${score}</strong></td>
-      <td>${esc(p.country)}</td>
-      <td>${esc(p.city)}</td>
-      <td>${esc(p.district)}</td>
-      <td title="${escAttr(p.street)}">${esc(p.street)}</td>
-      <td>${esc(p.phone)}</td>
-      <td class="link-cell">${p.email ? `<a href="mailto:${escAttr(p.email)}">${esc(p.email)}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
-      <td class="link-cell">${p.website && /^https?:\/\//i.test(p.website) ? `<a href="${escAttr(p.website)}" target="_blank" rel="noopener noreferrer">↗ www</a>` : '—'}</td>
-    </tr>`;
-  }).join('');
-
-  document.getElementById('tableContainer').innerHTML = `
-    <table>
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Nazwa</th>
-          ${isCompanyMode ? '<th>Branża</th>' : ''}
-          <th>Ocena</th>
-          <th>Liczba opinii</th>
-          <th>Wynik</th>
-          <th>Kraj</th>
-          <th>Miasto</th>
-          <th>Dzielnica</th>
-          <th>Ulica</th>
-          <th>Telefon</th>
-          <th>E-mail</th>
-          <th>Strona WWW</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+  document.getElementById('tableContainer').innerHTML = buildTableHtml(data, {
+    mode: 'full',
+    rowClick: (p, i) => `focusMarker(${i})`,
+  });
 }
 
 function focusMarker(idx) {
-  if (markers[idx]) {
-    map.panTo(markers[idx].getPosition());
-    map.setZoom(15);
-    google.maps.event.trigger(markers[idx], 'click');
-  }
+  const marker = markerByIdx.get(idx);
+  if (!marker || !map) return;
+  map.panTo(marker.getPosition());
+  map.setZoom(15);
+  google.maps.event.trigger(marker, 'click');
 }
 
 function typeLabel(t) {
@@ -2176,22 +2295,16 @@ function renderAnalytics(data) {
   destroyCharts();
 
   const accent = '#D97757';
-  const accent2 = '#C4623E';
-  const accentLight = 'rgba(217,119,87,0.15)';
-  const green = '#3A9E6E';
   const muted = '#7A776F';
-  const chartFont = { family: "'Inter', sans-serif", size: 11, color: '#1A1915' };
 
-  Chart.defaults.font.family = chartFont.family;
-  Chart.defaults.font.size = chartFont.size;
+  Chart.defaults.font.family = "'Inter', sans-serif";
+  Chart.defaults.font.size = 11;
   Chart.defaults.color = muted;
 
   // ── Summary cards ──
   const avgRating = (data.reduce((s,p) => s+p.rating, 0) / data.length).toFixed(2);
   const totalReviews = data.reduce((s,p) => s+p.reviews, 0);
-  const avgScore = (data.reduce((s,p) => s + p.rating * Math.log10(p.reviews+1), 0) / data.length).toFixed(1);
-  const topPlace = data[0];
-  const districts = [...new Set(data.map(p => p.district).filter(Boolean))];
+  const avgScore = (data.reduce((s,p) => s + scoreOf(p), 0) / data.length).toFixed(1);
 
   document.getElementById('summaryCards').innerHTML = `
     <div class="a-card">
@@ -2292,6 +2405,10 @@ function renderAnalytics(data) {
     label: p.name,
   }));
 
+  // Średnia liczona RAZ. Wcześniej reduce po całym zbiorze siedział w środku map()
+  // — O(n²) — a przy minReviews=0 dzielenie przez zero dawało NaN i wykres znikał.
+  const meanReviews = (totalReviews / data.length) || 1;
+
   chartInstances.push(new Chart(document.getElementById('chartScores'), {
     type: 'bubble',
     data: {
@@ -2299,7 +2416,7 @@ function renderAnalytics(data) {
         data: scatterData.map(d => ({
           x: d.x,
           y: d.y,
-          r: Math.max(4, Math.min(18, d.x / (data.reduce((s,p)=>s+p.reviews,0)/data.length) * 8)),
+          r: Math.max(4, Math.min(18, (d.x / meanReviews) * 8)) || 4,
         })),
         backgroundColor: 'rgba(217,119,87,0.35)',
         borderColor: accent,
@@ -2379,35 +2496,39 @@ async function scrapeEmails(data, dbg) {
   if (dbg) dbg(`Szukanie adresów email (0/${withWebsite.length})...`);
 
   let found = 0;
-  for (let i = 0; i < withWebsite.length; i++) {
-    if (searchAborted) break;
-    const place = withWebsite[i];
-    if (dbg) dbg(`Szukanie email (${i+1}/${withWebsite.length}): ${place.name}...`);
+  let done = 0;
+
+  // Sekwencyjnie z sleep(100) i timeoutem 10 s: 200 lokali to nawet 30 minut.
+  // Backend ma własny limit 500/h i budżet czasu, więc 4 równolegle go nie przeciąża.
+  await mapLimit(withWebsite, 4, async (place) => {
     try {
       const resp = await fetch(`${EMAIL_SCRAPER_URL}?url=${encodeURIComponent(place.website)}`, {
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(15000),   // backend oddaje odpowiedź do 12 s
+        referrerPolicy: 'no-referrer',
       });
       if (resp.ok) {
         const json = await resp.json();
-        if (json.emails && json.emails.length > 0) {
-          const email = json.emails[0];
-          // Walidacja formatu emaila z backendu
-          if (typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length < 80) {
-            place.email = email;
-            found++;
-          }
+        const email = Array.isArray(json.emails) ? json.emails[0] : null;
+        // Walidacja formatu emaila z backendu
+        if (typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length < 80) {
+          place.email = email;
+          found++;
         }
       }
     } catch (e) {
       // Timeout lub błąd sieci — pomijamy
     }
-    await sleep(100); // nie zalewamy serwera
-  }
+    done++;
+    if (dbg) dbg(`Szukanie email (${done}/${withWebsite.length}) · znaleziono ${found}`);
+    // Pokazuj adresy na bieżąco, nie dopiero na końcu
+    if (done % 20 === 0) refreshCurrentView();
+  });
 
   if (dbg) dbg(`Znaleziono ${found} adresów email`);
 
-  // Odśwież tabelę z emailami
-  renderResults(data);
+  // Odśwież tabelę zgodnie z aktywnym widokiem (wcześniej zawsze renderResults,
+  // co w trybie skupisk kasowało przefiltrowaną listę)
+  refreshCurrentView();
 }
 
 // ── EXCEL EXPORT ──
@@ -2415,50 +2536,22 @@ function exportExcel() {
   if (!results.length) return;
 
   const city = document.getElementById('cityInput').value;
-  const typeL = typeLabel(activeChip);
   const isCompanyMode = (activeChip === 'company');
 
-  const headers = isCompanyMode
-    ? ['#', 'Nazwa', 'Branża', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Kraj', 'Miasto', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW', 'Google Maps']
-    : ['#', 'Nazwa', 'Ocena Google', 'Liczba opinii', 'Wynik', 'Kraj', 'Miasto', 'Dzielnica', 'Ulica', 'Telefon', 'E-mail', 'Strona WWW', 'Google Maps'];
-
-  const wsData = [
-    headers,
-    ...results.map((p, i) => {
-      const base = [
-        i + 1, p.name,
-        ...(isCompanyMode ? [p.industry || ''] : []),
-        p.rating, p.reviews,
-        parseFloat((p.rating * Math.log10(p.reviews + 1)).toFixed(1)),
-        p.country, p.city, p.district, p.street,
-        p.phone, p.email, p.website, p.googleUrl
-      ];
-      return base;
-    })
-  ];
-
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-  ws['!cols'] = isCompanyMode
-    ? [{wch:5},{wch:35},{wch:22},{wch:12},{wch:14},{wch:8},{wch:12},{wch:16},{wch:20},{wch:28},{wch:18},{wch:22},{wch:32},{wch:40}]
-    : [{wch:5},{wch:35},{wch:12},{wch:14},{wch:8},{wch:12},{wch:16},{wch:20},{wch:28},{wch:18},{wch:22},{wch:32},{wch:40}];
-
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, isCompanyMode ? 'Firmy' : 'Lokale');
+  XLSX.utils.book_append_sheet(wb, buildSheet(results, 'full'), isCompanyMode ? 'Firmy' : 'Lokale');
 
-  const metaData = [
+  const wsMeta = XLSX.utils.aoa_to_sheet([
     ['Raport wygenerowany przez', 'Gastro Finder'],
     ['Data', new Date().toLocaleDateString('pl-PL')],
-    ['Typ wyszukiwania', typeL],
+    ['Typ wyszukiwania', typeLabel(activeChip)],
     ['Wyszukiwana lokalizacja', city],
     ['Liczba wyników', results.length],
-  ];
-  const wsMeta = XLSX.utils.aoa_to_sheet(metaData);
-  wsMeta['!cols'] = [{wch:28},{wch:40}];
+  ]);
+  wsMeta['!cols'] = [{ wch: 28 }, { wch: 40 }];
   XLSX.utils.book_append_sheet(wb, wsMeta, 'Informacje');
 
-  const fileName = `gastro_finder_${city.replace(/\s+/g,'_').toLowerCase()}_${new Date().toISOString().slice(0,10)}.xlsx`;
-  XLSX.writeFile(wb, fileName);
+  XLSX.writeFile(wb, `gastro_finder_${safeFileName(city)}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 // ── HELPERS ──
