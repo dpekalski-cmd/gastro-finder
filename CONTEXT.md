@@ -32,8 +32,17 @@ Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin)
   - to nie jest DBSCAN — nie ma pojęcia punktu granicznego ani rdzeniowego, każdy lokal trafia do co najwyżej jednego skupiska
 
   **Parametry** (sidebar, przeliczane na żywo z debounce 130 ms):
-  - promień skupiska: 50–1500 m, krok 25, **domyślnie 400 m**. Wcześniej domyślne 100 m przy typowym wyszukiwaniu (20 lokali w dzielnicy) dawało zero skupisk i pierwsze wejście w ten widok wyglądało jak awaria
-  - min. lokali w skupisku: 2–12, domyślnie 3
+  - **rozpiętość skupiska**: 50–1500 m, krok 25, **domyślnie 175 m**
+  - min. lokali w skupisku: 2–12, **domyślnie 2**
+
+  ⚠️ **Suwak podaje ROZPIĘTOŚĆ, nie promień — nie pomyl tego przy następnej zmianie.**
+  `computeClusters(places, radiusMeters, minCount)` przyjmuje **zasięg od punktu zaczepienia**: członkami są lokale w promieniu `radiusMeters` od punktu o największej gęstości. Grupa rozciąga się więc na **dwa** takie zasięgi — dwa skrajne lokale mogą dzielić do `2 × radiusMeters`. Dlatego `recomputeClusters()` dzieli wartość suwaka przez 2 przed wywołaniem.
+  Zmierzone na 2649 syntetycznych skupiskach: przy rozpiętości 175 m (czyli R = 87,5 m) faktyczne maksimum to 170,5 m, zero przekroczeń. Wcześniejsza wersja z suwakiem = promień 100 m dawała rozpiętość do 196,9 m, czyli 3,20 min marszu — poza budżetem.
+
+  **Skąd 175 m** — kryterium: skupisko obchodzalne w 2–3 minuty pieszo.
+  `3 min × 80 m/min = 240 m marszu ÷ 1,3 (obejście ulicami) ≈ 185 m` w linii prostej jako dopuszczalna rozpiętość; najbliższa niższa wartość na kroku 25 to **175 m** (= 2,77 min w najgorszym przypadku, 1,16 min dla typowego skupiska).
+
+  🐛 Znany drobiazg: koło rysowane na mapie ma środek w **centroidzie** członków, a członkowie byli wybrani wokół **punktu zaczepienia** — przy ~3% skupisk jeden lokal wypada poza narysowanym kołem. Kosmetyka, nie wpływa na przynależność ani na rozpiętość.
 
   **Na mapie**: koła `Circle` kolorowane wg wielkości przez `clusterColor()` (7+ czerwone, 5–6 pomarańczowe, 4 żółte, 2–3 zielone) + InfoWindow z licznikiem i śr. oceną; lokale poza skupiskami jako szare kropki. Legenda w sidebarze używa tych samych progów i kolorów.
 
@@ -104,7 +113,9 @@ Wersja v4 miała lukę SSRF: `max_redirects => 5` w stream wrapperze oznaczało,
 - Klasteryzacja własna (zachłanna, haversine) zamiast MarkerClusterer — potrzebne były realne promienie w metrach i eksport członków skupiska
 - **Heatmapa — usunięta.** Google wycofał `visualization.HeatmapLayer` w Maps JS 3.65 (maj 2026); własna implementacja canvasowa nie dawała zadowalającej jakości. Wzór `ocena × log10(opinie+1)` pozostaje — zasila kolumnę „Wynik”, sortowanie i eksport
 - Widok Skupiska pokazuje listę **pogrupowaną**, nie płaską — wcześniej pod mapą ze skupiskami stała ta sama tabela co w trybie Lista i nie było widać przypisania lokali do skupisk
-- Domyślny promień skupiska 400 m (nie 100 m) — dobrany tak, żeby typowe wyszukiwanie od razu dawało niepuste skupiska
+- Suwak skupiska podaje **rozpiętość, nie promień** (domyślnie 175 m), bo rozpiętość jest wielkością, którą użytkownik faktycznie odczuwa — „jak daleko mogą być od siebie dwa lokale w jednej grupie". Promień od punktu zaczepienia to szczegół implementacyjny algorytmu i przy poprzedniej wersji suwaka prowadził do liczenia kryterium o połowę za luźno
+- Wartość 175 m wyprowadzona z kryterium użytkowego (obchodzalność w 2–3 min pieszo), nie z „żeby coś pokazało". Wcześniej stało 400 m dobrane pod niepuste wyniki — kryterium obchodzalności wygrało, bo grupa rozciągnięta na 800 m nie jest trasą handlową, tylko dzielnicą
+- Domyślne minimum lokali obniżone z 3 na **2**: przy tak ciasnej rozpiętości para lokali to realnie ta sama ulica i użyteczna informacja przy wizytach handlowych, a minimum 3 dawało pusty widok w ~23% typowych wyszukiwań i ~75% przy lokalach rozproszonych. Legenda skupisk i `clusterColor()` już wcześniej traktowały 2 jako poprawny rozmiar („Małe — 2–3 lokale")
 - Z dashboardu usunięte „Top 5 vs pozostałe" i „Rozkład Wyniku" (bubble) — zostawiono dwa wykresy, które faktycznie były czytane
 - Klasteryzacja liczona na siatce przestrzennej (komórka = promień, sąsiedzi w oknie 3×3), z punktowym odświeżaniem liczników po wycięciu skupiska — semantyka zachłanna identyczna jak w wersji naiwnej, ale bez O(n³). Zweryfikowane: te same skupiska, 100–600× szybciej (500 lokali: 5,1 s → 8 ms)
 - Żądania do Places API idą równolegle z limitem współbieżności (4 dla nearbySearch, 6 dla getDetails) + retry na `OVER_QUERY_LIMIT`; sekwencyjne pobieranie było wąskim gardłem całej aplikacji

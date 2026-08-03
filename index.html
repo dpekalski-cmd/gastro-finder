@@ -873,12 +873,12 @@
     <!-- PARAMETRY SKUPISK (widoczne tylko w trybie skupisk) -->
     <div class="cluster-params" id="clusterParams">
       <div>
-        <div class="field-label">Promień skupiska</div>
+        <div class="field-label">Rozpiętość skupiska</div>
         <div style="display:flex;align-items:center;gap:10px;">
-          <input type="range" id="clusterRadius" min="50" max="1500" step="25" value="400"
+          <input type="range" id="clusterSpread" min="50" max="1500" step="25" value="175"
             style="flex:1;accent-color:var(--accent);cursor:pointer;"
-            oninput="document.getElementById('clusterRadiusVal').textContent=this.value+'m'; recomputeClustersDebounced();"/>
-          <span id="clusterRadiusVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:52px;">400m</span>
+            oninput="document.getElementById('clusterSpreadVal').textContent=this.value+'m'; recomputeClustersDebounced();"/>
+          <span id="clusterSpreadVal" style="font-size:0.88rem;font-weight:600;color:var(--accent);min-width:52px;">175m</span>
         </div>
       </div>
       <div>
@@ -1112,6 +1112,10 @@ function refreshCurrentView() {
 }
 
 // ── ALGORYTM KLASTERYZACJI (grid-based) ──
+// UWAGA: radiusMeters to zasięg od punktu ZACZEPIENIA, nie średnica ani nie
+// rozpiętość grupy. Grupa rozciąga się na dwa takie zasięgi, więc dwa skrajne
+// lokale mogą dzielić do 2×radiusMeters. Suwak w UI podaje rozpiętość i dzieli
+// ją przez 2 przed wywołaniem tej funkcji — patrz recomputeClusters().
 // Dla każdego lokalu zliczamy ile innych jest w promieniu R metrów.
 // Następnie grupujemy zachłannie: bierzemy punkt z najwyższą gęstością,
 // tworzymy skupisko, usuwamy z puli — powtarzamy.
@@ -1231,7 +1235,11 @@ function recomputeClustersDebounced() {
 
 function recomputeClusters() {
   if (!results.length || !map) return;
-  const radius = parseInt(document.getElementById('clusterRadius').value);
+  // Suwak podaje ROZPIĘTOŚĆ skupiska (maksymalny dystans między dwoma lokalami
+  // w jednej grupie). computeClusters przyjmuje zasięg od punktu zaczepienia,
+  // a grupa rozciąga się na dwa takie zasięgi — stąd dzielenie przez 2.
+  const spread = parseInt(document.getElementById('clusterSpread').value);
+  const radius = spread / 2;
   const minCount = parseInt(document.getElementById('clusterMin').value);
 
   clearClusterOverlays();
@@ -1243,7 +1251,7 @@ function recomputeClusters() {
 
   if (!clusterData.length) {
     document.getElementById('resultsTitle').innerHTML =
-      `<strong>0 skupisk</strong> · zwiększ promień lub zmniejsz min. lokali`;
+      `<strong>0 skupisk</strong> · zwiększ rozpiętość lub zmniejsz min. lokali`;
     renderClusterGroups();
     return;
   }
@@ -1358,7 +1366,7 @@ function selectCluster(idx, scrollToGroup = true) {
   const bar = document.getElementById('clusterInfoBar');
   bar.classList.add('visible');
   document.getElementById('clusterInfoText').innerHTML =
-    `Skupisko <strong>#${idx + 1}</strong>: <strong>${cl.count} ${plLokal(cl.count)}</strong> w promieniu ${cl.radius}m · śr. ocena <strong>★${cl.avgRating}</strong>`;
+    `Skupisko <strong>#${idx + 1}</strong>: <strong>${cl.count} ${plLokal(cl.count)}</strong> w rozpiętości do ${cl.radius * 2}m · śr. ocena <strong>★${cl.avgRating}</strong>`;
 
   document.getElementById('clusterExportBtn').classList.add('visible');
 
@@ -1526,7 +1534,7 @@ function renderClusterGroups() {
   }
 
   const hint = clusterData.length ? '' :
-    `<div class="cl-nohit">Brak skupisk dla podanych parametrów — zwiększ promień lub zmniejsz min. lokali</div>`;
+    `<div class="cl-nohit">Brak skupisk dla podanych parametrów — zwiększ rozpiętość lub zmniejsz min. lokali</div>`;
 
   el.innerHTML = hint +
     `<table class="cl-table"><thead>${tableHeadHtml('compact')}</thead>${groups}${outsideHtml}</table>`;
@@ -1603,7 +1611,7 @@ function exportCluster() {
   const wsMeta = XLSX.utils.aoa_to_sheet([
     ['Skupisko', `#${selectedClusterIdx + 1}`],
     ['Liczba lokali', cl.count],
-    ['Promień skupiska', cl.radius + 'm'],
+    ['Rozpiętość skupiska', cl.radius * 2 + 'm'],
     ['Śr. ocena', cl.avgRating],
     ['Lokalizacja', city],
     ['Data', new Date().toLocaleDateString('pl-PL')],
