@@ -570,6 +570,18 @@
     border-radius: 50%;
     flex-shrink: 0;
   }
+  /* Inny wymiar informacji niż pozycje kolorowe (te mapują kolor na liczbę
+     lokali) — stąd separator i mniejsza czcionka, żeby nie czytało się jako
+     kolejna kategoria. */
+  .legend-note {
+    margin-top: 3px;
+    padding-top: 7px;
+    border-top: 1px solid var(--border);
+    font-size: 0.67rem;
+    line-height: 1.4;
+    color: var(--text-muted);
+    opacity: 0.8;
+  }
 
   /* ── LISTA POGRUPOWANA PO SKUPISKACH ── */
   /* Jedna tabela, po jednym <tbody> na skupisko — kolumny wyrównane między grupami */
@@ -898,6 +910,7 @@
       <div class="legend-row"><div class="legend-dot" style="background:#EA580C;opacity:0.7;"></div>Duże — 5–6 lokali</div>
       <div class="legend-row"><div class="legend-dot" style="background:#CA8A04;opacity:0.65;"></div>Średnie — 4 lokale</div>
       <div class="legend-row"><div class="legend-dot" style="background:#4D7C0F;opacity:0.6;"></div>Małe — 2–3 lokale</div>
+      <div class="legend-note">wielkość koła = zasięg skupiska</div>
     </div>
 
     <!-- EKSPORT SKUPISKA -->
