@@ -1,7 +1,7 @@
 # Gastro Finder — Kontekst projektu
 
 ## Co to jest
-Jednostronicowa aplikacja HTML (index.html, ~2500 linii) do wyszukiwania lokali gastronomicznych i firm na Google Maps, z analityką, widokami skupisk/heatmapy i eksportem do Excel. Hostowana na GitHub Pages: https://dpekalski-cmd.github.io/gastro-finder/ (repo: dpekalski-cmd/gastro-finder).
+Jednostronicowa aplikacja HTML (index.html, ~2500 linii) do wyszukiwania lokali gastronomicznych i firm na Google Maps, z analityką, widokiem skupisk i eksportem do Excel. Hostowana na GitHub Pages: https://dpekalski-cmd.github.io/gastro-finder/ (repo: dpekalski-cmd/gastro-finder).
 
 Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin) — scrapuje emaile ze stron www lokali.
 
@@ -22,7 +22,7 @@ Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin)
 - Min. ocena (3.0–5.0), min. liczba opinii (0–500) — `passesQualityFilter`
 - Blacklisty typów i nazw (`isBlacklisted`) — osobne dla gastro i firm
 
-### Widoki (przełącznik „Tryb widoku": Lista / Skupiska / Heatmapa)
+### Widoki (przełącznik „Tryb widoku": Lista / Skupiska)
 - **Lista** — klasyczne markery numerowane + tabela z rankingiem
 - **Skupiska** — klasteryzacja geograficzna:
   - Algorytm zachłanny: dla każdego punktu liczymy sąsiadów w promieniu R (haversine), bierzemy punkt o największej gęstości, tworzymy skupisko, usuwamy członków z puli, powtarzamy
@@ -31,10 +31,6 @@ Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin)
   - Legenda skupisk w sidebarze
   - Klik w skupisko → pan/zoom, pasek info nad tabelą, filtrowanie tabeli do członków skupiska, przycisk „Eksportuj skupisko do Excel" (osobny arkusz + zakładka Info z metadanymi)
   - Tabela w trybie skupisk ma badge `S1`, `S2`… przy lokalach przypisanych do skupisk
-- **Heatmapa** — **własna implementacja** na `google.maps.OverlayView` + canvas (klasa tworzona leniwie przez `heatmapOverlayClass()`, bo `OverlayView` nie istnieje w czasie parsowania skryptu). Waga punktu = `max(0.2, (rating-3)/2 × log10(reviews+1))`, normalizowana do 0–1 względem najmocniejszego punktu. Promień 35 px, opacity 0.75, gradient zielony→żółty→czerwony — identyczne wartości jak w usuniętym `HeatmapLayer`. Auto-fitBounds
-  - Algorytm: radialny gradient („stempel") rysowany raz i powielany przez `drawImage` z `globalAlpha = waga` → nakładające się punkty sumują alfę, która staje się mapą gęstości; potem kanał alfy służy jako indeks w 256-elementowej palecie
-  - Optymalizacje: `draw()` pomija przerysowanie, dopóki widok mieści się w narysowanym obszarze (margines 160 px) — panoramowanie obsługuje sam panel mapy; kolorowany jest tylko prostokąt faktycznie zamalowany; bufor w pikselach CSS, nie `devicePixelRatio` (4× mniej pikseli na Retinie)
-  - Zmierzone: ~5 ms (100 punktów), ~11 ms (300), ~16,5 ms (500) na pełny render; pełny render tylko przy zoomie i większych przesunięciach
 
 ### Analityka (Chart.js)
 - 4 karty summary: liczba lokali, śr. ocena, łącznie opinii, śr. Wynik
@@ -48,7 +44,7 @@ Backend PHP (email-scraper.php) na hostingu plonpol.pl (Cyberfolks, DirectAdmin)
 ### Pozostałe
 - Email scraping (warunkowy, checkbox „Szukaj adresów e-mail") — PHP backend przeszukuje stronę główną → podstrony /kontakt (max 3, wykrywane z linków lub zgadywane) → guessEmails przez DNS MX + weryfikacja SMTP RCPT TO
 - Eksport Excel (SheetJS) — arkusz danych + arkusz „Informacje"; kolumna Branża w trybie Firmy
-- Klucz API wpisywany przez użytkownika (overlay na starcie), ładowany z `libraries=places,visualization`
+- Klucz API wpisywany przez użytkownika (overlay na starcie), ładowany z `libraries=places`
 - Zabezpieczenia: XSS (`esc()` — jedna implementacja escapująca `& < > " '`), walidacja `https?://` przy linkach, walidacja formatu klucza API, walidacja emaili z backendu, sanityzacja nazwy pliku eksportu
 
 ## Backend: email-scraper.php v5 (hardening)
@@ -67,20 +63,18 @@ Wersja v4 miała lukę SSRF: `max_redirects => 5` w stream wrapperze oznaczało,
 - `rawurldecode` zamiast `urldecode` — ten drugi zamieniał `+` na spację i psuł adresy typu `jan+kontakt@domena.pl`
 
 ## Architektura techniczna
-- Frontend: czysty HTML/CSS/JS, Google Maps JavaScript API + Places API (legacy/classic), Chart.js 4.4.1, SheetJS 0.18.5. Biblioteka `visualization` **nie jest już ładowana** — `libraries=places`
+- Frontend: czysty HTML/CSS/JS, Google Maps JavaScript API + Places API (legacy/classic), Chart.js 4.4.1, SheetJS 0.18.5
 - Backend: PHP na plonpol.pl/email-scraper.php
 - Hosting frontend: GitHub Pages (dpekalski-cmd/gastro-finder)
 - Paleta kolorów: Claude.ai (akcent #D97757), font Inter
 
 ## Znane ograniczenia
-- **`google.maps.visualization.HeatmapLayer` został usunięty z Maps JavaScript API w wersji 3.65 (maj 2026)** — dlatego heatmapa jest własna, a nie z Google. Oficjalną rekomendacją Google jest deck.gl, ale to kilkaset kB zależności dla jednego widoku w aplikacji, która poza tym nie ma żadnego bundlera ani zależności npm. Własna klasa na `OverlayView` to ~120 linii i zero nowych plików. Konsekwencja: przy zmianie API paneli/projekcji w Maps JS trzeba to samodzielnie utrzymać
-- Heatmapa nie skaluje promienia z zoomem (35 px niezależnie od skali) — tak samo zachowywał się `HeatmapLayer`, ale przy mocnym oddaleniu skupiska zlewają się w jedną plamę
 - Zmiana klucza wyszukiwania Google: `google.maps.Geocoder` wymaga **osobno włączonego Geocoding API** w Google Cloud Console (oraz obecności Geocoding API na liście *API restrictions* klucza). Bez tego geokoder zwraca `REQUEST_DENIED` i wyszukiwanie nie startuje wcale
 - nearbySearch zwraca max 20 wyników/punkt (brak paginacji przy rankBy:DISTANCE)
 - Google nie udostępnia emaili ani historii ocen
 - Email scraper nie działa dla Facebook/Instagram (JavaScript rendering)
 - Weryfikacja SMTP (port 25) może być zablokowana na hostingu współdzielonym
-- **Na mobile (≤700px) mapa jest ukryta przez CSS `!important`** — widoki Skupiska i Heatmapa są tam bezużyteczne (`recomputeClusters`/`showHeatmap` wymagają mapy); po wyszukiwaniu na mobile rysowanie markerów/klastrów jest pomijane
+- **Na mobile (≤700px) mapa jest ukryta przez CSS `!important`** — widok Skupiska jest tam bezużyteczny (`recomputeClusters` wymaga mapy); po wyszukiwaniu na mobile rysowanie markerów/klastrów jest pomijane
 - Zakładki mobilne (`.mobile-tabs`) są ukryte — układ na mobile jest jednokolumnowy, przewijalny; `switchTab()` pozostał w kodzie jako martwy
 - Na mobile (iOS) działa tylko przez hosting (nie file://)
 - Tryb Firmy zwraca głównie biura rachunkowe — potencjał do poprawy keywordów
@@ -94,8 +88,7 @@ Wersja v4 miała lukę SSRF: `max_redirects => 5` w stream wrapperze oznaczało,
 - Siatka pełna dla gastro (jeden keyword), 4-punktowa × wiele keywordów dla firm
 - Facebook email scraping: próba /about, potem guessEmails przez MX/SMTP
 - Klasteryzacja własna (zachłanna, haversine) zamiast MarkerClusterer — potrzebne były realne promienie w metrach i eksport członków skupiska
-- Heatmapa waży punkty jakością (ocena × log opinii), nie samą liczbą lokali
-- Heatmapa własna zamiast deck.gl po usunięciu `HeatmapLayer` — priorytetem było niedokładanie ciężkiej zależności do aplikacji jednoplikowej. Zachowane te same parametry wizualne (promień, opacity, gradient), więc widok wygląda jak wcześniej
+- **Heatmapa — usunięta.** Google wycofał `visualization.HeatmapLayer` w Maps JS 3.65 (maj 2026); własna implementacja canvasowa nie dawała zadowalającej jakości. Wzór `ocena × log10(opinie+1)` pozostaje — zasila kolumnę „Wynik”, sortowanie i eksport
 - Klasteryzacja liczona na siatce przestrzennej (komórka = promień, sąsiedzi w oknie 3×3), z punktowym odświeżaniem liczników po wycięciu skupiska — semantyka zachłanna identyczna jak w wersji naiwnej, ale bez O(n³). Zweryfikowane: te same skupiska, 100–600× szybciej (500 lokali: 5,1 s → 8 ms)
 - Żądania do Places API idą równolegle z limitem współbieżności (4 dla nearbySearch, 6 dla getDetails) + retry na `OVER_QUERY_LIMIT`; sekwencyjne pobieranie było wąskim gardłem całej aplikacji
 
@@ -104,4 +97,4 @@ Wersja v4 miała lukę SSRF: `max_redirects => 5` w stream wrapperze oznaczało,
 - PWA (Progressive Web App) do „zainstalowania" na iOS
 - Lepszy email scraping (headless browser — wymaga VPS)
 - Poprawa trybu Firmy (więcej branż, lepsze filtrowanie)
-- Widok skupisk/heatmapy na mobile (wymaga pokazania mapy na małych ekranach)
+- Widok skupisk na mobile (wymaga pokazania mapy na małych ekranach)
